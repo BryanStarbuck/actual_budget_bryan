@@ -42,7 +42,8 @@
     "#scripts/*": "./src/scripts/*.js",
     "#services/*": "./src/services/*.js",
     "#util/title": "./src/util/title/index.js",
-    "#util/*": "./src/util/*.ts"
+    "#util/*": "./src/util/*.ts",
+    "#machine/*": "./src/machine/*.ts"
   },
   "publishConfig": {
     "imports": {
@@ -70,7 +71,8 @@
       "#scripts/*": "./build/src/scripts/*.js",
       "#services/*": "./build/src/services/*.js",
       "#util/title": "./build/src/util/title/index.js",
-      "#util/*": "./build/src/util/*.js"
+      "#util/*": "./build/src/util/*.js",
+      "#machine/*": "./build/src/machine/*.js"
     }
   },
   "scripts": {
@@ -110,6 +112,7 @@
     "winston": "^3.19.0"
   },
   "devDependencies": {
+    "@actual-app/api": "workspace:*",
     "@types/bcrypt": "^6.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/convict": "^6",

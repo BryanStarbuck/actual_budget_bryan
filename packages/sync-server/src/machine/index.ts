@@ -1,5 +1,5 @@
 /**
- * The machine plane — pm/cli.mdx §5.
+ * The machine plane — pm/apis.mdx.
  *
  * A loopback-only HTTP surface for programs rather than browsers, mounted on
  * the sync server because it is this repo's only long-running Node process.
@@ -27,24 +27,55 @@
  * `initMachinePlane()` is called from run() to give it one. Until that call
  * the router 404s everything, which is R9's fail-closed behaviour and not a
  * special case — an unauthenticated machine plane is never a fallback.
+ *
+ * The ROUTE TABLE is one array (§6.3). The router below and `/capabilities`
+ * are both built from it, so the server cannot describe itself incorrectly.
  */
 import express from 'express';
 import type { Request, Response } from 'express';
 
 import { fingerprint, resolveMachineKey } from './credentials-file.js';
+import { engineState, requireEngine, shutdownEngine } from './engine.js';
 import { MachineError, sendError, sendOk, toMachineError } from './envelope.js';
 import { machineAuthMiddleware } from './machine-auth.js';
 import type { MachineRequest } from './machine-auth.js';
+import type { AnyRouteDef } from './route.js';
+import { MAX_BODY_BYTES, planeRoutes } from './routes/plane.js';
+import { plannedRoutes } from './routes/planned.js';
+import { assertTier, grantsFromEnv } from './tier.js';
+import type { TierGrants } from './tier.js';
 
 export type MachinePlaneInfo = {
   keyFingerprint: string;
   allowWrite: boolean;
+  allowAdmin: boolean;
+  routeCount: number;
 };
 
 /** Set once, by initMachinePlane(). Null means "not mounted" to every request. */
-let plane: { key: string; allowWrite: boolean } | null = null;
+let plane: { key: string; grants: TierGrants; env: NodeJS.ProcessEnv } | null =
+  null;
 
-const SERVER_VERSION = process.env.npm_package_version ?? 'unknown';
+/**
+ * THE route table. One array, no second list.
+ *
+ * Later phases append their families here; nothing else changes.
+ */
+export const ROUTES: readonly AnyRouteDef[] = [
+  ...planeRoutes,
+  ...plannedRoutes,
+];
+
+const SERVER_VERSION = readServerVersion();
+
+function readServerVersion(): string {
+  // `npm_package_version` is only set when the process was started by a
+  // package manager script. The server is also started as `node build/app.js`
+  // (which is what `just server-bg` does through yarn, and what the Docker
+  // image does directly), so this has to degrade to something honest rather
+  // than claiming a version it does not know.
+  return process.env.npm_package_version ?? 'unknown';
+}
 
 export const machineRouter = express.Router();
 
@@ -74,24 +105,63 @@ machineRouter.use((req, res, next) => {
   }
   machineAuthMiddleware({
     key: current.key,
-    allowWrite: current.allowWrite,
+    allowWrite: current.grants.write,
   })(req, res, next);
 });
 
+// Bodies are parsed AFTER the gate ladder, deliberately. An unauthenticated
+// caller should never reach a parser: JSON parsing is attack surface, and
+// spending it on a request that gate 1 or gate 3 is about to refuse is work
+// done on behalf of someone we are refusing to talk to.
+machineRouter.use(express.json({ limit: MAX_BODY_BYTES }));
+
 /**
- * Wrap a handler so a throw becomes an envelope rather than Express's default
- * HTML error page — which would be an unparseable surprise for both callers.
+ * Turn a route definition into an Express handler: gate 4, gate 5, then run.
+ *
+ * A throw becomes an envelope rather than Express's default HTML error page,
+ * which would be an unparseable surprise for both callers.
  */
-function handle(
-  fn: (req: MachineRequest) => Promise<{ data: unknown; meta?: object }>,
-) {
+function handlerFor(def: AnyRouteDef) {
   return async (req: Request, res: Response): Promise<void> => {
     const startedAt = Date.now();
+    const current = plane;
+
     try {
-      const { data, meta } = await fn(req as MachineRequest);
+      if (current === null) {
+        throw new MachineError('not_found', 'Not found.');
+      }
+
+      // Gate 4 — tier.
+      assertTier(def.tier, current.grants);
+
+      // Gate 5 — input. Query for reads, body for everything else; a route
+      // never reads both, so a caller cannot get a different answer depending
+      // on where they put the argument.
+      const raw = def.method === 'GET' ? req.query : req.body;
+      const args = def.validate(raw, def.method === 'GET' ? 'query' : 'body');
+
+      // The engine, only for the routes that actually need it — so the
+      // diagnostic routes keep answering when it is broken (§8.0).
+      if (def.needsEngine) {
+        await requireEngine(current.env);
+      }
+
+      const { data, meta } = await def.run({
+        args,
+        req: req as MachineRequest,
+        res,
+        grants: current.grants,
+        keyFingerprint: fingerprint(current.key),
+        serverVersion: SERVER_VERSION,
+        env: current.env,
+        routes: ROUTES,
+        engine: () => engineState(current.env),
+      });
+
       sendOk(res, data, {
         serverVersion: SERVER_VERSION,
         tookMs: Date.now() - startedAt,
+        tier: def.tier,
         ...meta,
       });
     } catch (err) {
@@ -100,45 +170,15 @@ function handle(
   };
 }
 
-/** Write routes need the server's tier AND the caller's --write (§5.2). */
-function requireWriteTier(req: MachineRequest): void {
-  if (!req.machine.allowWrite) {
-    throw new MachineError(
-      'write_disabled',
-      'The write tier is off on this server.',
-      'start the sync server with ACTUAL_MACHINE_ALLOW_WRITE=1',
-    );
-  }
+for (const def of ROUTES) {
+  const method = def.method.toLowerCase() as
+    | 'get'
+    | 'post'
+    | 'patch'
+    | 'put'
+    | 'delete';
+  machineRouter[method](def.path, handlerFor(def));
 }
-
-/**
- * /health proves the process is alive; ping proves the plane is mounted and
- * the key is right. A green /health with a 401 from ping is the single most
- * likely first-run failure, and it needs to be distinguishable (§3.2).
- */
-machineRouter.get(
-  '/ping',
-  handle(async req => ({
-    data: {
-      ok: true,
-      writeTier: req.machine.allowWrite,
-      keyFingerprint: fingerprint(plane?.key ?? ''),
-      serverVersion: SERVER_VERSION,
-    },
-  })),
-);
-
-machineRouter.post(
-  '/sync',
-  handle(async req => {
-    requireWriteTier(req);
-    throw new MachineError(
-      'not_ready',
-      'Budget routes are not wired up yet.',
-      'see pm/cli.mdx §21 — build phase P4',
-    );
-  }),
-);
 
 /**
  * Terminal 404 — nothing under /machine/v1 escapes this router.
@@ -156,7 +196,7 @@ machineRouter.use((_req: Request, res: Response) => {
     error: {
       code: 'not_found',
       message: 'No such machine-plane route.',
-      hint: 'see pm/cli.mdx §5.2 for the route table',
+      hint: 'GET /machine/v1/capabilities for the route table',
     },
   });
 });
@@ -180,15 +220,20 @@ export function initMachinePlane(
     return null;
   }
 
-  plane = {
-    key: resolved.key,
-    allowWrite: env.ACTUAL_MACHINE_ALLOW_WRITE === '1',
-  };
+  const grants = grantsFromEnv(env);
+  plane = { key: resolved.key, grants, env };
 
   return {
     keyFingerprint: fingerprint(resolved.key),
-    allowWrite: plane.allowWrite,
+    allowWrite: grants.write,
+    allowAdmin: grants.admin,
+    routeCount: ROUTES.length,
   };
+}
+
+/** Release the engine on the way out, so the budget's database closes cleanly. */
+export async function stopMachinePlane(): Promise<void> {
+  await shutdownEngine();
 }
 
 /** Test seam: forget the key so a test can assert the fail-closed path. */

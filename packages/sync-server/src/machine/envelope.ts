@@ -50,7 +50,23 @@ export type Meta = {
   budgetName?: string;
   truncated?: boolean;
   limitApplied?: number;
+  /** Which tier the route that answered required. Read is the default state. */
+  tier?: 'read' | 'write' | 'admin';
 };
+
+/**
+ * CASING, stated once because it is the kind of thing that gets re-litigated
+ * (pm/apis.mdx §5.1a):
+ *
+ *   `meta` and `error` are OURS, and they are camelCase — this is a
+ *   TypeScript codebase and mcp.mdx §12.1 already publishes camelCase.
+ *
+ *   `data` is the ENGINE'S, verbatim, in the engine's own casing — which is
+ *   snake_case (`balance_current`, `account_group_id`, `is_income`). Renaming
+ *   it here would be a translation layer, and a translation layer is a second
+ *   representation of every entity that can drift from the first. §2 R7 says
+ *   the app decides and we report; renaming what it decided is not reporting.
+ */
 
 export class MachineError extends Error {
   readonly code: ErrorCode;

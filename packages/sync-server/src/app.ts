@@ -19,7 +19,11 @@ import * as secretApp from './app-secrets';
 import * as simpleFinApp from './app-simplefin/app-simplefin';
 import * as syncApp from './app-sync';
 import { config } from './load-config';
-import { initMachinePlane, machineRouter } from './machine/index.js';
+import {
+  initMachinePlane,
+  machineRouter,
+  stopMachinePlane,
+} from './machine/index.js';
 
 const app = express();
 
@@ -243,9 +247,19 @@ export async function run() {
   const machinePlane = initMachinePlane();
   if (machinePlane) {
     console.log(
-      `Machine plane armed on /machine/v1 (key ${machinePlane.keyFingerprint}, ` +
-        `writes ${machinePlane.allowWrite ? 'ENABLED' : 'disabled'})`,
+      `Machine plane armed on /machine/v1 ` +
+        `(key ${machinePlane.keyFingerprint}, ${machinePlane.routeCount} routes, ` +
+        `writes ${machinePlane.allowWrite ? 'ENABLED' : 'disabled'}, ` +
+        `admin ${machinePlane.allowAdmin ? 'ENABLED' : 'disabled'})`,
     );
+
+    // Close the budget's database on the way out. Without this, a restart can
+    // find a lock held by a process that no longer exists (apis.mdx §15).
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      process.once(signal, () => {
+        void stopMachinePlane().finally(() => process.exit(0));
+      });
+    }
   }
 
   if (config.get('https.key') && config.get('https.cert')) {
