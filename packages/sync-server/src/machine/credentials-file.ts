@@ -1,0 +1,294 @@
+/**
+ * The machine key — pm/cli.mdx §4.
+ *
+ * One 256-bit CSPRNG secret, minted by whichever of the three processes (this
+ * server, `abx`, the MCP) needs it first, living in a 0600 file in the
+ * operator's home directory and NEVER in this repo.
+ *
+ * The write merges into the existing JSON rather than replacing it: three
+ * unrelated products may share ~/.credentials/, and a writer that serialises
+ * the file whole from memory is the one program most likely to delete somebody
+ * else's secret at 2am (§4.3).
+ *
+ * This module is duplicated verbatim in cli/code/src/credentials.ts and
+ * mcp/src/credentials.ts — by copy-with-test, not by import, because a
+ * cross-directory import between independently built top-level tools is a
+ * build-order dependency nobody wants (mcp.mdx §4). A test asserts the copies
+ * agree below their import blocks.
+ */
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export type MachineCredentials = {
+  api_key: string;
+  created: string;
+  created_by: 'sync-server' | 'abx' | 'mcp';
+  label?: string;
+};
+
+/** The shape of ~/.credentials/actual_budget.json. Other products' top-level keys are preserved. */
+type CredentialsFile = {
+  actual_budget?: {
+    machine?: Partial<MachineCredentials>;
+    statements?: { root?: string };
+  };
+  [otherProduct: string]: unknown;
+};
+
+export const DEFAULT_CREDENTIALS_PATH = path.join(
+  os.homedir(),
+  '.credentials',
+  'actual_budget.json',
+);
+
+/** 64 lowercase hex characters — 32 bytes from a CSPRNG (§4.5 R1). */
+const KEY_PATTERN = /^[0-9a-f]{64}$/;
+
+export function isWellFormedKey(key: string): boolean {
+  return KEY_PATTERN.test(key);
+}
+
+export function mintKey(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * A key's public name: first 4 hex characters plus a SHA-256 prefix (§4.5 R2).
+ *
+ * This is the ONLY representation of the key that may be logged, printed or
+ * put in an error. Two people can confirm they hold the same key without
+ * either of them exchanging one.
+ */
+export function fingerprint(key: string): string {
+  const digest = crypto.createHash('sha256').update(key).digest('hex');
+  return `${key.slice(0, 4)}…/sha256:${digest.slice(0, 4)}`;
+}
+
+export class CredentialsError extends Error {
+  readonly fix: string;
+
+  constructor(message: string, fix: string) {
+    super(message);
+    this.name = 'CredentialsError';
+    this.fix = fix;
+  }
+}
+
+export function credentialsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    env.ABX_CREDENTIALS_FILE ??
+    env.ABMCP_CREDENTIALS_FILE ??
+    DEFAULT_CREDENTIALS_PATH
+  );
+}
+
+/**
+ * Refuse a credentials file that anyone else can read (§4.4).
+ *
+ * A world-readable shared secret is a finding, not a warning, so this throws
+ * rather than logging. `lstat`, not `stat`: a symlink here is somebody
+ * redirecting our write, and following it to a well-moded target would be
+ * exactly the wrong answer.
+ */
+export function assertSafeMode(file: string): void {
+  const stat = fs.lstatSync(file);
+
+  if (stat.isSymbolicLink()) {
+    throw new CredentialsError(
+      `${file} is a symlink; refusing to read a redirected credentials file.`,
+      `rm ${file} and let it be re-minted`,
+    );
+  }
+  if (!stat.isFile()) {
+    throw new CredentialsError(
+      `${file} is not a regular file.`,
+      `rm ${file} and let it be re-minted`,
+    );
+  }
+  if (stat.uid !== os.userInfo().uid) {
+    throw new CredentialsError(
+      `${file} is owned by uid ${stat.uid}, not by you.`,
+      `sudo chown ${os.userInfo().uid} ${file}`,
+    );
+  }
+  // 0o077 — any permission bit for group or other.
+  if ((stat.mode & 0o077) !== 0) {
+    const mode = (stat.mode & 0o777).toString(8).padStart(3, '0');
+    throw new CredentialsError(
+      `${file} is mode ${mode}; it must not be readable by anyone else.`,
+      `chmod 600 ${file}`,
+    );
+  }
+}
+
+function readFileIfPresent(file: string): CredentialsFile {
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+  assertSafeMode(file);
+
+  const raw = fs.readFileSync(file, 'utf8').trim();
+  if (raw === '') {
+    return {};
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('not a JSON object');
+    }
+    return parsed as CredentialsFile;
+  } catch (err) {
+    throw new CredentialsError(
+      `${file} is not valid JSON (${(err as Error).message}).`,
+      `fix or remove ${file}`,
+    );
+  }
+}
+
+/**
+ * Atomic, merging, symlink-refusing write (§4.3).
+ *
+ * Temp file in the SAME directory (so the rename cannot cross a filesystem),
+ * O_EXCL so we never land on somebody else's temp, fsync before rename so a
+ * crash cannot leave a truncated secret, and 0600 from creation rather than
+ * chmod-after — a file that is briefly 0644 is a file that was briefly
+ * readable.
+ */
+function writeMerged(
+  file: string,
+  mutate: (doc: CredentialsFile) => void,
+): void {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const doc = readFileIfPresent(file);
+  mutate(doc);
+
+  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.tmp`);
+  const fd = fs.openSync(tmp, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // Refuse to clobber through a symlink somebody planted at the destination.
+  if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) {
+    fs.unlinkSync(tmp);
+    throw new CredentialsError(
+      `${file} is a symlink; refusing to write through it.`,
+      `rm ${file} and retry`,
+    );
+  }
+
+  fs.renameSync(tmp, file);
+}
+
+export type KeySource = 'env' | 'env-file' | 'credentials-file' | 'minted';
+
+export type ResolvedKey = {
+  key: string;
+  source: KeySource;
+  /** The credentials file consulted, whether or not the key came from it. */
+  file: string;
+};
+
+/**
+ * Resolution order, first hit wins (§4.2). `mint` is false for callers that
+ * want to report a missing key rather than create one.
+ */
+export function resolveMachineKey(
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    mint?: boolean;
+    mintedBy?: MachineCredentials['created_by'];
+    label?: string;
+  } = {},
+): ResolvedKey | null {
+  const env = opts.env ?? process.env;
+  const file = credentialsPath(env);
+
+  const inline = env.ABX_MACHINE_KEY ?? env.ABMCP_MACHINE_KEY;
+  if (inline) {
+    return {
+      key: assertKeyShape(inline, 'the environment'),
+      source: 'env',
+      file,
+    };
+  }
+
+  const keyFile = env.ABX_MACHINE_KEY_FILE ?? env.ABMCP_MACHINE_KEY_FILE;
+  if (keyFile) {
+    const contents = fs.readFileSync(keyFile, 'utf8').trim();
+    return { key: assertKeyShape(contents, keyFile), source: 'env-file', file };
+  }
+
+  const existing = readFileIfPresent(file).actual_budget?.machine?.api_key;
+  if (existing) {
+    return {
+      key: assertKeyShape(existing, file),
+      source: 'credentials-file',
+      file,
+    };
+  }
+
+  if (!opts.mint) {
+    return null;
+  }
+
+  const key = mintKey();
+  writeMerged(file, doc => {
+    // Re-read inside the write so a concurrent minter wins rather than ties.
+    const product = (doc.actual_budget ??= {});
+    if (product.machine?.api_key) {
+      return;
+    }
+    product.machine = {
+      api_key: key,
+      created: new Date().toISOString(),
+      created_by: opts.mintedBy ?? 'sync-server',
+      ...(opts.label ? { label: opts.label } : {}),
+    };
+  });
+
+  // Whoever wrote first wins; read back rather than trusting our own mint.
+  const settled = readFileIfPresent(file).actual_budget?.machine?.api_key;
+  return {
+    key: assertKeyShape(settled ?? key, file),
+    source: 'minted',
+    file,
+  };
+}
+
+function assertKeyShape(key: string, where: string): string {
+  if (!isWellFormedKey(key)) {
+    throw new CredentialsError(
+      `The machine key from ${where} is not 64 hex characters.`,
+      'abx key rotate --yes',
+    );
+  }
+  return key;
+}
+
+/** The statements root, when it is configured in the credentials file (§10.1). */
+export function readStatementsRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const file = credentialsPath(env);
+  return readFileIfPresent(file).actual_budget?.statements?.root ?? null;
+}
+
+export function readMachineMetadata(
+  env: NodeJS.ProcessEnv = process.env,
+): Partial<MachineCredentials> | null {
+  const file = credentialsPath(env);
+  return readFileIfPresent(file).actual_budget?.machine ?? null;
+}

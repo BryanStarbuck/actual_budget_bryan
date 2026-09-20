@@ -29,7 +29,18 @@ _check-tools:
     #!/usr/bin/env bash
     set -uo pipefail
     command -v node >/dev/null || { echo "node not found — brew install node"; exit 1; }
-    command -v yarn >/dev/null || { echo "yarn not found — corepack enable"; exit 1; }
+    if ! command -v yarn >/dev/null; then
+      # Node 25 dropped the bundled corepack, so `corepack enable` is itself "command not found" on a
+      # homebrew node >= 25. Install corepack as its own formula; it ships the yarn shim that reads
+      # package.json "packageManager" and pulls the pinned yarn 4.
+      if command -v corepack >/dev/null; then
+        echo "yarn not found — run: corepack enable"
+      else
+        echo "yarn not found — run: brew install corepack && brew link --overwrite corepack"
+        echo "  (node $(node -v) no longer bundles corepack, so \`corepack enable\` will not work on its own)"
+      fi
+      exit 1
+    fi
     major=$(node -p 'process.versions.node.split(".")[0]')
     if [ "$major" -lt 22 ]; then echo "node $(node -v) is too old — package.json requires >=22"; exit 1; fi
 
@@ -48,9 +59,44 @@ setup: _check-tools
 install: _check-tools
     cd "{{root}}" && yarn install
 
-# Build every workspace (lage build across the monorepo).
-build: setup
-    cd "{{root}}" && yarn build
+# mobile-client is skipped on purpose. Its `build` script is `cap sync ios && xcodebuild … archive`
+# followed by `cap sync android && ./gradlew assembleDebug` — it archives a native iOS app and
+# assembles an Android APK, so it wants CocoaPods, a full Xcode install and the Android SDK. None of
+# that is needed to build or run the web app, and without CocoaPods a plain `yarn build` dies with
+# "[error] CocoaPods is not installed." The native path lives in `just build-mobile` instead.
+#
+# Why the scope list instead of `--scope '!mobile-client'`: lage's --scope expands to dependencies
+# AND dependents, and mobile-client depends on @actual-app/web, so negating it still drags it back
+# in. `--no-deps` turns off the dependents expansion, and the scope list is derived from the live
+# workspace list (minus the root workspace and mobile-client) so new packages are picked up on their
+# own.
+#
+# Build every workspace except mobile-client, plus the operator CLI.
+build: setup build-cli
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}"
+    scope=$(yarn workspaces list --json \
+      | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' \
+      | grep -vx -e actual -e mobile-client)
+    yarn lage build --no-deps --scope $scope
+
+# `cli/` lives OUTSIDE the "packages/*" workspace glob on purpose, so an
+# upstream merge can never touch it — which also means `yarn workspaces` does
+# not reach it and the build has to be explicit here. That cost is paid once,
+# in this recipe, forever. The CLI must never be stale relative to the app, so
+# this is a dependency of `build` rather than a separate thing to remember.
+#
+# Build the operator CLI (pm/cli.mdx §2.3) — outside the workspace glob.
+build-cli:
+    cd "{{root}}/cli" && just build
+
+# Needs CocoaPods (`brew install cocoapods`), Xcode with its command line tools, and the Android SDK
+# with a working ./gradlew — expect it to fail loudly if any of the three is missing.
+#
+# Native iOS + Android build for the Capacitor shell (NOT part of `just build`).
+build-mobile: setup
+    cd "{{root}}" && yarn build:mobile
 
 # Production browser bundle -> packages/desktop-client/build (needs COOP/COEP headers to be served).
 build-browser: setup
@@ -96,9 +142,68 @@ run: setup
 dev: setup
     cd "{{root}}" && yarn start
 
-# Sync server (optional — only needed for multi-device sync / server-backed budget files).
+# FOREGROUND: Ctrl-C ends it, and nothing is written to a log. For the detached
+# form that `abx` uses, see `server-bg`.
+#
+# Sync server, foreground (optional — multi-device sync / server-backed files).
 server: setup
     cd "{{root}}" && yarn start:server
+
+# Sync server, DETACHED — the form `abx` brings up (pm/cli.mdx §3.1).
+#
+# `server` above runs in the foreground and writes no log, so there was no
+# server.log, no server.pid, and no guard on :5006 the way `run` guards :3001.
+# This recipe closes all three, and `abx up` does the same work, so an operator
+# alternating between `just` and `abx` never ends up with two sync servers.
+#
+# The machine plane (pm/cli.mdx §5) is mounted by this process, so this is also
+# what `abx` and the MCP are talking to.
+#
+# Sync server, detached on :5006, with server.log + server.pid — what `abx up` does.
+server-bg: setup
+    #!/usr/bin/env bash
+    set -uo pipefail
+    mkdir -p "{{state}}"
+    holder=$(lsof -nP -iTCP:{{server_port}} -sTCP:LISTEN -t 2>/dev/null | head -1)
+    if [ -n "$holder" ]; then
+      if [ -f "{{state}}/server.pid" ] && [ "$holder" = "$(cat "{{state}}/server.pid")" ]; then
+        echo "sync server already up (pid $holder) — http://localhost:{{server_port}}/"
+        exit 0
+      fi
+      echo "PORT {{server_port}} IS HELD by pid $holder ($(ps -p "$holder" -o comm= 2>/dev/null))."
+      echo "Free it (kill $holder) and re-run — we will not kill a process we did not start."
+      exit 1
+    fi
+    cd "{{root}}"
+    nohup yarn start:server >> "{{state}}/server.log" 2>&1 &
+    echo $! > "{{state}}/server.pid"
+    echo "starting sync server (pid $(cat "{{state}}/server.pid")) — log: {{state}}/server.log"
+    for _ in $(seq 1 120); do
+      # Gate on /health, NEVER on the port merely being open: a listening
+      # socket is not a booted app, and :3001 answering is not this process at
+      # all (pm/cli.mdx §3.2).
+      if curl -fsS "http://127.0.0.1:{{server_port}}/health" 2>/dev/null | grep -q '"UP"'; then
+        echo "  sync server is up:  http://localhost:{{server_port}}/"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "timed out waiting for :{{server_port}}/health — last lines:"
+    tail -30 "{{state}}/server.log"
+    exit 1
+
+# Stop the detached sync server (and only ours).
+stop-server:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [ -f "{{state}}/server.pid" ]; then
+      pid=$(cat "{{state}}/server.pid")
+      kill "$pid" 2>/dev/null
+      rm -f "{{state}}/server.pid"
+      echo "stopped sync server (pid $pid)"
+    else
+      echo "no recorded sync server pid — nothing of ours to stop"
+    fi
 
 # Web app + sync server together, foreground (yarn's own combined dev script).
 run-with-server: setup
@@ -146,9 +251,13 @@ status:
       fi
     done
 
-# Follow the background dev log written by `run`.
+# Follow the background dev log written by `run` (and the sync server's, if present).
 logs:
-    tail -f "{{state}}/dev.log"
+    #!/usr/bin/env bash
+    set -uo pipefail
+    files="{{state}}/dev.log"
+    [ -f "{{state}}/server.log" ] && files="$files {{state}}/server.log"
+    tail -f $files
 
 # Print the pinned URLs.
 url:

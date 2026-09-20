@@ -1,23 +1,31 @@
 ---
 title: Actual Budget — the MCP server (`actual_budget`)
 description: >
-  The Model Context Protocol server that lets Claude Code read and (deliberately rarely) write THIS
-  install of Actual Budget. Node + TypeScript, stdio transport, registered as `actual_budget`, every
-  tool named `ab_*`. It is a thin caller of the same localhost MACHINE PLANE the CLI uses
-  (cli.mdx §5) and it authenticates the same way: a 256-bit machine key the app generates with a
-  CSPRNG into ~/.credentials/actual_budget.json at mode 0600, sent as X-Actual-Machine-Key,
-  compared in constant time, on routes that 404 for anything that did not arrive on loopback. There
-  is no password, no OAuth, no token to paste — a process that can read that file is already a
-  process running as this operator on this computer, and a process that cannot is turned away before
-  the key is even read. Reads are always available; the WRITE TIER IS OFF BY DEFAULT and needs two
-  independent switches plus an echoed confirmation. The catalogue covers accounts, transactions,
-  categories, budget months, payees, rules, schedules, a guarded ActualQL escape hatch, and the
-  bank-statement import pipeline — whose de-duplication is deterministic and whose authority on
-  "does this already exist" remains Actual's own importTransactions, never ours. Three other
-  finance-shaped MCP servers are registered on this machine (quickbooks, act3, and the upstream
-  actual CLI's world); §3 is the seven-layer defence that stops a model answering confidently about
-  the wrong ledger. The rule this whole path exists to keep is §10: money is integer cents, and "not
-  budgeted" is not "budgeted zero".
+  The Model Context Protocol server that lets Claude Code read and (deliberately carefully) write
+  THIS install of Actual Budget. Node + TypeScript, stdio transport, registered as `actual_budget`,
+  every tool named `ab_*`. It is a THIN CALLER of the machine-plane API — apis.mdx is the contract,
+  this spec is one of its two clients, and a tool that needs a calculation the plane does not have
+  is a missing ROUTE, never a calculation added here. It authenticates the way the CLI does: a
+  256-bit machine key the app mints with a CSPRNG into ~/.credentials/actual_budget.json at mode
+  0600, sent as X-Actual-Machine-Key, compared in constant time, on routes that 404 for anything
+  that did not arrive on loopback. There is no password, no OAuth, no token to paste — a process
+  that can read that file is already a process running as this operator on this computer, and a
+  process that cannot is turned away before the key is even read. Reads are always available; the
+  WRITE TIER IS OFF BY DEFAULT and needs two independent switches, a dry run, and a confirm token
+  the model can only obtain by having read the plan. The catalogue is SIXTY-EIGHT tools in ten
+  families and it is sized by one goal: everything a person can do in the web UI, an agent can do
+  here. That means the ordinary reads, but also the ANALYTICS family (where every total comes from,
+  so the model never sums), the ENVELOPE OPERATIONS a budgeter uses monthly (cover overspending,
+  move money between categories, copy last month, N-month averages, goal templates), reconciliation
+  against a printed statement, rule authorship with a preview, account provisioning from a statement
+  manifest, the bank-statement import pipeline — whose authority on "does this already exist"
+  remains Actual's own importTransactions, never ours — and ab_undo, because an agent that can write
+  must be an agent that can be un-written. What the model is told about money, about asking, about
+  breaking a request into a todo list and about how to report a number lives in a separate,
+  editable instructions payload: ai/mcp_prompt.md (§8.3). Three other finance-shaped MCP servers are
+  registered on this machine; §3 is the seven-layer defence that stops a model answering confidently
+  about the wrong ledger. The rule this whole path exists to keep is §10: money is integer cents,
+  and "not budgeted" is not "budgeted zero".
 ---
 
 # Actual Budget — the MCP server (`actual_budget`)
@@ -55,6 +63,7 @@ description: >
 - [16. What it leaves on disk](#16-what-it-leaves-on-disk)
 - [17. Testing it](#17-testing-it)
 - [18. Use cases](#18-use-cases)
+  - [18.1 What people actually type](#181-what-people-actually-type)
 - [19. Acceptance criteria](#19-acceptance-criteria)
 - [20. Build phases](#20-build-phases)
 - [21. Invariants recap](#21-invariants-recap)
@@ -81,8 +90,20 @@ agent.** Claude Code asks a question about the budget and gets a typed answer, w
 without a shelled-out command whose output has to be parsed, and without a second copy of the
 budget logic existing anywhere.
 
+Behind all three is one API, specified in **[apis.mdx](./apis.mdx)**. That spec is the contract;
+this one is a client of it. The division is worth stating plainly because it decides where every
+future argument gets settled:
+
+- _What can be computed, and what it is called on the wire_ → apis.mdx.
+- _Which of those a model should be offered, what the tool is called, and what its description says_
+  → here.
+- _How the model should think about money and talk to the operator_ →
+  [ai/mcp_prompt.md](../ai/mcp_prompt.md).
+
 The CLI and the MCP are siblings, not layers. They read the same key, call the same routes, and get
-the same answers. Neither wraps the other.
+the same answers. Neither wraps the other, and **neither is allowed to grow a calculation the other
+does not have** — that is what keeps the browser, the terminal and the agent from disagreeing about
+a balance.
 
 ### What the operator gets from it
 
@@ -142,15 +163,21 @@ different thing entirely.
 
 ## Goal
 
-**An agent can answer any question about this budget without inventing a number, and cannot change
-the budget by accident.**
+**An agent can do anything the operator could do in the web UI, can answer any question about this
+budget without inventing a number, and cannot change the budget by accident.**
 
-Both halves are load-bearing:
+Three halves, each load-bearing:
 
+- _Anything the UI could do_ — the catalogue is measured against [apis.mdx](./apis.mdx) §9's
+  coverage matrix. A cell that has a route and no tool is a gap in this spec, and a cell that has
+  neither is a gap in that one. Deliberate omissions (linking a bank, changing an encryption key,
+  deleting anything) are listed as decisions in §9.5.
 - _Without inventing a number_ — every figure is computed behind the machine plane and returned
-  verbatim; the server's own code never sums, filters, rounds or estimates (§9.4, §10).
-- _Cannot change it by accident_ — 28 of 33 tools are read-only, the five that write require the
-  server's write tier **and** a per-call `confirm` echo, and a write with no ceiling is refused
+  verbatim; the server's own code never sums, filters, rounds or estimates (§9.4, §10). The
+  ANALYTICS family exists so that a total is always a tool call and never a model's addition.
+- _Cannot change it by accident_ — 50 of 68 tools are read-only, the 18 that write require the
+  server's write tier **and** this server's, **and** `dry_run: false`, **and** a `confirm` token
+  that only the matching plan produces, under a ceiling that refuses and reports the real count
   (§9.7).
 
 ---
@@ -164,23 +191,33 @@ Both halves are load-bearing:
 | **Lives in**           | `~/BGit/Bryan_git/actual_budget_bryan/mcp/` (top level, outside the workspace glob)       |
 | **Stack**              | TypeScript on Node ≥ 22, ESM, `@modelcontextprotocol/sdk` pinned exact                    |
 | **Transport**          | stdio, newline-delimited JSON-RPC. `stdout` carries **only** JSON-RPC                     |
-| **Talks to**           | `http://127.0.0.1:5006/machine/v1/*` — the machine plane ([cli.mdx](./cli.mdx) §5)        |
+| **Talks to**           | `http://127.0.0.1:5006/machine/v1/*` — the machine-plane API ([apis.mdx](./apis.mdx))     |
+| **Contract**           | [apis.mdx](./apis.mdx) is the authority on the wire; this spec is one of its two clients  |
 | **Authenticates with** | `X-Actual-Machine-Key`, from `~/.credentials/actual_budget.json` (0600)                   |
 | **Env prefix**         | `ABMCP_`                                                                                  |
 | **Logs**               | `~/T/_actual_budget/mcp.info` and `mcp.err` — beside the CLI's `cli.info`/`cli.err`       |
-| **Writes?**            | **off by default.** 28 of 33 tools read; the 5 that write need two switches and a confirm |
+| **Writes?**            | **off by default.** 50 of 68 tools read; the 18 that write need two switches, a dry run and a token |
 | **Computes?**          | nothing                                                                                   |
+| **Instructions**       | `ai/mcp_prompt.md`, loaded from disk at startup — editable without a rebuild (§8.3)       |
 
 ---
 
 ## 1. What this is, in one paragraph
 
 `actual_budget` is a stdio MCP server that exposes this install's budget to Claude Code as
-thirty-three typed tools. It holds no budget logic, no database connection, and no copy of the
-ledger: each tool validates its arguments, makes one authenticated call to the localhost machine
-plane, and returns the app's own answer inside a fixed envelope. It shares its credential, its
-routes and its engine with the CLI, so an answer an agent reads and an answer an operator reads in a
-terminal are the same answer, produced by the same code, or one of them is a bug.
+sixty-eight typed tools. It holds no budget logic, no database connection, and no copy of the
+ledger: each tool validates its arguments, makes one authenticated call to the machine-plane API
+described by [apis.mdx](./apis.mdx), and returns the app's own answer inside a fixed envelope. It
+shares its credential, its routes and its engine with the CLI, so an answer an agent reads and an
+answer an operator reads in a terminal are the same answer, produced by the same code, or one of
+them is a bug.
+
+The size of the catalogue is the point, not an accident. A budget tool an agent can only *read* is
+a novelty; an agent that can read the ledger, find where the money went, build next month from the
+last six, cover an overspend out of another envelope, reconcile against a paper statement, author a
+rule that fixes the next two hundred transactions, import a decade of bank statements into
+twenty-seven accounts it created itself — and undo any of it — is the thing worth building. Every
+one of those is a route in [apis.mdx](./apis.mdx) before it is a tool here.
 
 ---
 
@@ -271,7 +308,7 @@ Defence in depth, because any one layer can be defeated by a model having a bad 
 | --- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | 1   | Distinct server key `actual_budget`                                                             | Registration-level collision                                              |
 | 2   | `serverInfo.name` agreeing with the key                                                         | A human debugging a transcript seeing two names for one server            |
-| 3   | `ab_` prefix on all 33 tools                                                                    | The model losing the server segment (§3.2)                                |
+| 3   | `ab_` prefix on all 68 tools                                                                    | The model losing the server segment (§3.2)                                |
 | 4   | A fourth mandatory description clause naming the server (§9.2)                                  | A model reading a description and still not knowing whose tool it is      |
 | 5   | An `instructions` block with routing FIRST                                                      | The model choosing before it has read any tool description                |
 | 6   | Refuse-with-redirect on a foreign-shaped argument                                               | The model that has already chosen wrong — taught at the moment it crosses |
@@ -290,12 +327,26 @@ number, an ACT3 project id where a budget account id belongs — returns `isErro
 _"This looks like a QuickBooks identifier. This server only knows the Actual Budget install on this
 computer. Use the `quickbooks` server's `search_accounts`."_
 
-**Where the instructions text comes from.** `src/instructions.ts` is **generated at build time** from
-`mcp/MCP_prompt.prompt`, the single source. The build substitutes `{VARIABLE}` tokens from its own
-map — an unknown token is a **build failure naming the token**, never a literal brace shipped to the
-model — and emits `export const INSTRUCTIONS`. Editing the generated file by hand is editing a build
-artifact; a test asserts the checked-in artifact matches what the prompt generates, so a stale one
-cannot ship.
+**Where the instructions text comes from (LOCKED).** `src/instructions.ts` is **generated at build
+time** from **`ai/mcp_prompt.md`** — at the repo top level, beside `pm/`, not inside `mcp/`. That is
+the single source, and [../CLAUDE.md](../CLAUDE.md) names it as _"the prompt file our MCP server
+should use to know about our APIs and how to interact with the user."_
+
+The build substitutes `{VARIABLE}` tokens from its own map — an unknown token is a **build failure
+naming the token**, never a literal brace shipped to the model — and emits
+`export const INSTRUCTIONS`. Editing the generated file by hand is editing a build artifact; a test
+asserts the checked-in artifact matches what the prompt generates, so a stale one cannot ship.
+
+**Why it lives in `ai/` rather than `mcp/`.** The same reasoning as `pm/` (§4): it is prose a human
+maintains, not code, and keeping it out of `mcp/src/` means editing the thing the model reads does
+not look like editing the server. It also sits where a second consumer — a future agent prompt, a
+system prompt for a different surface — can share it without reaching into a server's source tree.
+
+**It is the product.** The routing sentence in layer 5 above is the first thing the model reads, and
+§9.2's four description clauses are the only documentation it gets before choosing a tool. Both live
+in this file. A build that cannot find it **fails**; it does not fall back to a default string,
+because a server that silently ships an empty `instructions` block is a server whose whole §3.4
+defence is gone with nothing to show for it.
 
 It is served in exactly **one** place: the `instructions` string in the `initialize` result. We
 declare `{ tools: {} }` and answer `-32601` to every `prompts/*` and `resources/*` request (§8), so
@@ -323,12 +374,13 @@ this text is never also exposed as an MCP prompt.
 
 ```
 actual_budget_bryan/
+├── ai/
+│   └── mcp_prompt.md         the SOURCE of the instructions block (§3.4). Prose, not code
 ├── mcp/
 │   ├── package.json          "private": true — never published
 │   ├── justfile              build | test | probe
-│   ├── MCP_prompt.prompt     the SOURCE of the instructions block (§3.4)
 │   ├── scripts/
-│   │   └── build-instructions.ts
+│   │   └── build-instructions.ts   reads ../ai/mcp_prompt.md -> src/instructions.ts
 │   ├── src/
 │   │   ├── index.ts          Main.run() — config, stderr banner, StdioServerTransport, signals
 │   │   ├── server.ts         McpServerHost — handleListTools(), handleCallTool()
@@ -342,12 +394,29 @@ actual_budget_bryan/
 │   │   │   ├── registry.ts   const TOOLS — the one array (§9.3)
 │   │   │   ├── tool.ts       interface ToolDef, function fail()
 │   │   │   └── *.ts          one file per family
-│   │   └── canary/
-│   │       ├── stdout-purity.canary.ts
-│   │       └── no-network.canary.ts
+│   │   └── canary/           one file per name in the §7.0 "Canary" column
+│   │       ├── stdout-purity.canary.ts    T13 — greps the BUILT dist/
+│   │       ├── no-network.canary.ts       T9  — host literals, one socket module
+│   │       ├── no-shell.canary.ts         T9  — child_process, eval
+│   │       ├── no-fs-write.canary.ts      T6  — fs write APIs outside logger + minter
+│   │       ├── gates.canary.ts            T1, T2 — the six gates, denied and allowed
+│   │       ├── routing.canary.ts          T3  — foreign identifiers redirect
+│   │       ├── origin-gate.canary.ts      T14, T15 — Origin / Sec-Fetch-Site / X-Forwarded-For
+│   │       ├── query-guard.canary.ts      T4  — denied tables and columns
+│   │       ├── redaction.canary.ts        T5  — no raw statement text, no full account number
+│   │       ├── envelope.canary.ts         T8  — budgetId, asOf, untrusted, closed error codes
+│   │       └── audit.canary.ts            T11 — hashed args, allowlisted scalars, no money
 │   └── dist/                 built, chmod +x, shebang banner
 └── packages/                 upstream's monorepo. Never put this there
 ```
+
+**Every row of the §7.0 threat table names a canary, and every canary named there is a file here.**
+An earlier draft listed eleven canaries in the threat model and shipped two files, which meant nine
+controls were asserted by a table rather than by a test — the exact failure mode a threat table is
+supposed to close. The two lists are checked against each other: a test reads the `Canary` column of
+§7.0 and asserts a matching `*.canary.ts` exists, so adding a threat row without a test fails the
+build, and so does deleting a canary a threat still depends on. A row whose control genuinely cannot
+be asserted by a test writes `—` in that column, as T7 and T10 do, and says why in the row.
 
 The reasoning is the CLI's, and it is worth stating once more because it is the thing most likely to
 be "tidied up" by a future contributor: the root `package.json` declares
@@ -449,14 +518,40 @@ yes, and for a reason specific to the deployment:
 
 - The machine plane **404s** anything that did not arrive on the loopback interface. An attacker on
   the network cannot reach the route at all, with or without the key.
-- Therefore the only callers the key distinguishes between are **processes already running on this
-  computer as this operator** — and such a process can read the `0600` file anyway. The key is not
-  the wall; the loopback gate is. The key is what stops a _different local user_ on a shared machine
-  and what makes the audit line meaningful.
+- The key distinguishes between callers that **are** on this machine: a different local user on a
+  shared Mac, and — the case below — a web page the operator has open. It is also what makes the
+  audit line meaningful.
 - So the honest description is: **the shared-filesystem trick is a same-filesystem mechanism, and it
   is the right one because the surface it guards is a same-filesystem surface.** When a hosted
   deployment arrives, machine callers get a real token scheme. This does not travel, and §7.3's
   tripwire refuses to let it try.
+
+**A correction, because an earlier draft got this backwards.** That draft said _"the key is not the
+wall; the loopback gate is."_ It is wrong, and wrong in the one direction that is reachable from the
+open internet.
+
+`packages/sync-server/src/app.ts` calls `app.use(cors())` with no options — permissive, reflecting
+any origin — and the machine plane mounts inside that app. A page at `https://evil.example` that the
+operator merely **visits** can issue `fetch('http://127.0.0.1:5006/machine/v1/…')`, and that request
+arrives on the loopback interface, because the browser running it is on this machine. **The loopback
+gate passes it.** The same is true of a DNS-rebinding attack, which exists precisely to turn a remote
+page into a loopback client.
+
+What actually stops that page is the key it cannot read — plus the fact that `X-Actual-Machine-Key`
+is not a CORS-safelisted header, so the browser must preflight, and the page cannot satisfy the
+preflight without the key either.
+
+> **The loopback gate stops other computers. The key stops other origins and other users on this
+> one.** Two walls, each load-bearing against a different attacker. Neither is decorative, and the
+> key is emphatically not a formality.
+
+[cli.mdx §4.4a](./cli.mdx#44a-two-things-the-surrounding-express-app-does-that-the-gate-must-survive-locked)
+specifies the second control the machine plane adds on top: it opts out of the app-wide `cors()`,
+refuses any request carrying a browser `Origin` or a `Sec-Fetch-Site` of `cross-site`/`same-site`/
+`none`, and checks the `Host` header — so a page is turned away before the key is even considered.
+The same section covers the other thing the surrounding app does to us: `app.set('trust proxy', …)`
+is global, which makes `req.ip` forgeable via `X-Forwarded-For`, so the loopback test reads
+`req.socket.remoteAddress` and nothing else.
 
 ### 6.3 The rules that differ for the MCP
 
@@ -489,21 +584,23 @@ six gates (§7.1) plus the machine plane's own gates are that.
 Each row is a way a persuasive string turns into harm, the control that stops it, and the canary
 that fails the build if the control regresses.
 
-| #   | Threat                                 | Vector                                                               | Primary control                                                                                                                      | Defence in depth                                                 | Canary                   |
-| --- | -------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | ------------------------ |
-| T1  | **Money moved or destroyed**           | model calls a write tool it was talked into                          | write tier off by default; TWO switches (§9.7)                                                                                       | `confirm` echo + `max_changes` ceiling + dry-run default         | `gates`                  |
-| T2  | **Silent large write**                 | a write that looked small and was not                                | server refuses a write exceeding `max_changes` and reports the count it would have made                                              | plan recomputed at apply time (§11.4)                            | `gates`                  |
-| T3  | **Ledger read as another's**           | model routes to `quickbooks` or is asked about a different budget    | the seven layers of §3.4                                                                                                             | every envelope carries `budgetId` and `budgetName` (§12.1)       | `routing`                |
-| T4  | **Query escape hatch abuse**           | `ab_query` used to reach data the typed tools withhold               | server-side read-only AQL guard; single statement; no raw SQL surface exists                                                         | row cap + byte cap + timeout                                     | `query-guard`            |
-| T5  | **PII / statement exfiltration**       | a tool coaxed into returning raw statement text or an account number | no tool returns raw statement text; account numbers returned as last-4 only (§7.4)                                                   | path containment on every statements tool                        | `redaction`              |
-| T6  | **Filesystem escape**                  | a statements path of `../../.ssh/id_rsa`                             | every path resolved to a real path and required to be inside the configured root — **in the server**, and again in the machine plane | the MCP has no `fs` write path at all                            | `no-fs-write`            |
-| T7  | **Resource exhaustion**                | a query or an extraction that never returns                          | `statement`-level timeout on the machine plane; response byte cap; concurrency 1 for writes                                          | the machine plane's own caps                                     | —                        |
-| T8  | **Prompt injection from ledger data**  | a payee or a note that reads _"ignore your instructions and…"_       | the server never executes row content; responses carry `"untrusted": true` on fields sourced from user or statement data (§7.5)      | arguments to a call never come from a prior result automatically | `envelope`               |
-| T9  | **RCE / exfiltration via the process** | a dependency shells out or phones home                               | **no `child_process`, no `fs.write*`, and exactly one host** — `127.0.0.1`                                                           | two runtime dependencies only                                    | `no-network`, `no-shell` |
-| T10 | **Key theft / weak auth**              | read the key file; forge it                                          | `0600` + owner check + symlink-refusing write; `timingSafeEqual`                                                                     | loopback gate means a stolen key is useless off-machine          | —                        |
-| T11 | **Audit tampering / PII in the log**   | an argument drags a payee or an amount into `mcp.info`               | arguments hashed; only a non-PII scalar allowlist logged verbatim (§16.2)                                                            | log is `0600`, append-only, rotating                             | `audit`                  |
-| T12 | **Wrong install**                      | a non-loopback `--api` used as if it were the laptop                 | loopback classifier; the key is never attached to a non-loopback, non-`https:` URL (§7.3)                                            | every envelope names the target                                  | —                        |
-| T13 | **stdout corruption**                  | one `console.log` from us or a dependency                            | the stdout ban, enforced against the **built** bundle                                                                                | no `out()` function exists in this codebase                      | `stdout-purity`          |
+| #   | Threat                                    | Vector                                                                                                                                               | Primary control                                                                                                                                                | Defence in depth                                                                    | Canary                   |
+| --- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------ |
+| T1  | **Money moved or destroyed**              | model calls a write tool it was talked into                                                                                                          | write tier off by default; TWO switches (§9.7)                                                                                                                 | `confirm` echo + `max_changes` ceiling + dry-run default                            | `gates`                  |
+| T2  | **Silent large write**                    | a write that looked small and was not                                                                                                                | server refuses a write exceeding `max_changes` and reports the count it would have made                                                                        | plan recomputed at apply time (§11.5)                                               | `gates`                  |
+| T3  | **Ledger read as another's**              | model routes to `quickbooks` or is asked about a different budget                                                                                    | the seven layers of §3.4                                                                                                                                       | every envelope carries `budgetId` and `budgetName` (§12.1)                          | `routing`                |
+| T4  | **Query escape hatch abuse**              | `ab_query` used to reach data the typed tools withhold                                                                                               | server-side read-only AQL guard; single statement; no raw SQL surface exists                                                                                   | row cap + byte cap + timeout                                                        | `query-guard`            |
+| T5  | **PII / statement exfiltration**          | a tool coaxed into returning raw statement text or an account number                                                                                 | no tool returns raw statement text; account numbers returned as last-4 only (§7.4)                                                                             | path containment on every statements tool                                           | `redaction`              |
+| T6  | **Filesystem escape**                     | a statements path of `../../.ssh/id_rsa`                                                                                                             | every path resolved to a real path and required to be inside the configured root — **in the server**, and again in the machine plane                           | the MCP has no `fs` write path at all                                               | `no-fs-write`            |
+| T7  | **Resource exhaustion**                   | a query or an extraction that never returns                                                                                                          | `statement`-level timeout on the machine plane; response byte cap; concurrency 1 for writes                                                                    | the machine plane's own caps                                                        | —                        |
+| T8  | **Prompt injection from ledger data**     | a payee or a note that reads _"ignore your instructions and…"_                                                                                       | the server never executes row content; responses carry `"untrusted": true` on fields sourced from user or statement data (§7.5)                                | arguments to a call never come from a prior result automatically                    | `envelope`               |
+| T9  | **RCE / exfiltration via the process**    | a dependency shells out or phones home                                                                                                               | **no `child_process`, no `fs.write*`, and exactly one host** — `127.0.0.1`                                                                                     | two runtime dependencies only                                                       | `no-network`, `no-shell` |
+| T10 | **Key theft / weak auth**                 | read the key file; forge it                                                                                                                          | `0600` + owner check + symlink-refusing write; `timingSafeEqual`                                                                                               | loopback gate means a stolen key is useless off-machine                             | —                        |
+| T11 | **Audit tampering / PII in the log**      | an argument drags a payee or an amount into `mcp.info`                                                                                               | arguments hashed; only a non-PII scalar allowlist logged verbatim (§16.2)                                                                                      | log is `0600`, append-only, rotating                                                | `audit`                  |
+| T12 | **Wrong install**                         | a non-loopback `--api` used as if it were the laptop                                                                                                 | loopback classifier; the key is never attached to a non-loopback, non-`https:` URL (§7.3)                                                                      | every envelope names the target                                                     | —                        |
+| T14 | **A web page reaching the machine plane** | the operator visits a hostile page, or a hostname is DNS-rebound to `127.0.0.1`; `app.use(cors())` is global and the request **arrives on loopback** | the **key**, which the page cannot read — plus the machine plane refusing any request with a browser `Origin` or `Sec-Fetch-Site` ([cli.mdx §4.4a](./cli.mdx)) | `X-Actual-Machine-Key` forces a preflight the page cannot satisfy; `Host` allowlist | `origin-gate`            |
+| T15 | **Forged loopback via a header**          | `X-Forwarded-For: 127.0.0.1` from off-machine, with `trust proxy` set app-wide                                                                       | the gate reads `req.socket.remoteAddress` only; `req.ip` is never consulted                                                                                    | 404, so nothing is learned from probing                                             | `origin-gate`            |
+| T13 | **stdout corruption**                     | one `console.log` from us or a dependency                                                                                                            | the stdout ban, enforced against the **built** bundle                                                                                                          | no `out()` function exists in this codebase                                         | `stdout-purity`          |
 
 ### 7.1 The six gates, in order
 
@@ -635,11 +732,68 @@ Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/index.ts` — class `Main`, 
 Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/logger.ts` — function `loggerFor(context)` — stderr and file only; there is deliberately no stdout path
 Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/canary/stdout-purity.canary.ts`
 
+### 8.3 The instructions payload (LOCKED)
+
+The server returns an `instructions` string in its `initialize` result. Its source is
+[`ai/mcp_prompt.md`](../ai/mcp_prompt.md), and §3.4 locks how it gets there: **generated into
+`src/instructions.ts` at build time**, with `{VARIABLE}` substitution, an unknown token failing the
+build, and a test asserting the checked-in artifact matches the prose.
+
+This section is about what goes **in** it, and about the one seam that design needs.
+
+**The tuning seam — `ABMCP_PROMPT_FILE`.** The instructions are the part of this system tuned most
+often and rebuilt least willingly: a model that reports a total it computed itself, or asks four
+clarifying questions where one would do, or reports a plan as a result, is fixed by editing prose.
+Setting `ABMCP_PROMPT_FILE` makes the server read that file at startup instead of using the
+generated constant, so the loop is edit-and-restart rather than edit-build-lint-commit-restart. It
+is a **development affordance and the generated constant remains the shipping path**: the override
+runs the same `{VARIABLE}` substitution and fails the same way on an unknown token, so it cannot be
+a second, quietly-divergent format. Unset — which is the normal case, including every registration
+in §5 — nothing is read from disk and there is no missing-file case to handle.
+
+**What belongs in it**, and the split is strict:
+
+| This spec (`mcp.mdx`)                     | The payload (`ai/mcp_prompt.md`)                              |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| Which tools exist and what they take      | Which tool to reach for when someone says "where's my money going" |
+| The response envelope                     | How to report a number to a human, and what to say about scope |
+| That writes need a token                  | That you show the operator the preview and wait for a real yes |
+| That money is integer cents               | That you never do arithmetic on money, and what to do instead  |
+| The error vocabulary                      | What to say to the operator for each code                      |
+| —                                         | When to ask a clarifying question and when to just decide      |
+| —                                         | How to break a request into a visible todo list                |
+| —                                         | The playbooks: the dozen things an operator actually asks      |
+| —                                         | The judgement the model is allowed to have, and the line it does not cross |
+
+**Rules on the payload:**
+
+- It is **advice about behaviour, never a source of facts about the budget.** No account names, no
+  entity names, no amounts, no paths into the operator's archive. It ships in a public repo (§17
+  of [apis.mdx](./apis.mdx)), and a canary greps it for `/Users/` and for a hex secret.
+- **Every tool name it mentions must exist.** A test parses the payload for `ab_[a-z_]+` and
+  asserts each one is in the catalogue. A payload that sends a model to a tool that was renamed is
+  worse than no payload.
+- **It never contradicts a tool description.** Where it would, the description wins on the wire and
+  the payload is the bug — the description is what the model reads at the moment of choosing.
+- **The first sentence is §3.4 layer 5, verbatim** — which server this is — because it is the first
+  thing the model reads and the thing it is most expensive to get wrong (AC 4).
+- If `ABMCP_PROMPT_FILE` is set and the file is missing or unreadable, the server logs one stderr
+  warning and falls back to the **generated constant**. A bad override never stops the server and
+  never ships an empty instructions block.
+
+Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/instructions.ts` — `INSTRUCTIONS` (generated), `resolveInstructions()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/scripts/build-instructions.ts` — the generator and the token map
+
 ---
 
 ## 9. The tool catalogue
 
-**Thirty-three tools in eight families. Twenty-eight are read-only.**
+**Sixty-eight tools in ten families. Fifty are read-only.**
+
+Every one of them is one route in [apis.mdx](./apis.mdx) §8 or §10. The mapping is one-to-one and a
+test asserts it in both directions: a tool with no route is a tool that cannot work, and a route
+with no tool is a decision that has to be written down in §9.5's omissions list rather than
+forgotten.
 
 ### 9.1 The naming rule
 
@@ -695,43 +849,81 @@ its verdict (§11.3).
 
 ### 9.5 The families
 
-**Orientation (3, read)**
+Ten families. Read tools first, because they are what the model spends its day in.
 
-| Tool              | Answers                                                                                                    |
-| ----------------- | ---------------------------------------------------------------------------------------------------------- |
-| `ab_whoami`       | which install, which budget, server version, key fingerprint, write tier on or off, target local or remote |
-| `ab_list_budgets` | the budget files this install knows                                                                        |
-| `ab_health`       | is the app up; if not, the exact command to bring it up. **Never starts it** (§9.8)                        |
+**Orientation (4, read)** — the first call of any session that will do anything
 
-**Accounts (3, read)**
+| Tool               | Answers                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `ab_whoami`        | which install, which budget (id **and** name), server version, key fingerprint, write tier, target, data date range |
+| `ab_list_budgets`  | the budget files this install knows                                                                        |
+| `ab_health`        | is the app up; if not, the exact command to bring it up. **Never starts it** (§9.8)                        |
+| `ab_capabilities`  | what this server build can actually do, so a missing feature is a sentence and not a 404                   |
 
-| Tool                     | Answers                                                 |
-| ------------------------ | ------------------------------------------------------- |
-| `ab_list_accounts`       | accounts with balances; `include_closed` defaults false |
-| `ab_get_account`         | one account                                             |
-| `ab_get_account_balance` | one balance, with an optional `as_of` date              |
+**Accounts (4, read)**
 
-**Transactions (3, read)**
+| Tool                        | Answers                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `ab_list_accounts`          | accounts with balances. `include_closed` false, `group_id`, `type`, `as_of` |
+| `ab_get_account`            | one account                                                              |
+| `ab_get_account_balance`    | one balance. `as_of`, `cleared_only`                                     |
+| `ab_get_account_properties` | transaction count, first and last transaction, cleared vs uncleared      |
 
-| Tool                    | Answers                                                                           |
-| ----------------------- | --------------------------------------------------------------------------------- |
-| `ab_list_transactions`  | account + date range + optional category / payee / cleared filters                |
-| `ab_get_transaction`    | one transaction, with its splits                                                  |
-| `ab_list_uncategorized` | every transaction with no category, across accounts — the commonest real question |
+**Transactions (4, read)**
 
-**Categories and the budget (6, read)**
+| Tool                     | Answers                                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `ab_list_transactions`   | account(s) + date range, plus `category_id`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `uncategorized`, `transfer_only`, `order`, `limit`, `offset` |
+| `ab_get_transaction`     | one transaction, with its splits                                                                                         |
+| `ab_list_uncategorized`  | every transaction with no category, across accounts — the commonest real question                                        |
+| `ab_export_transactions` | the same filters, rendered as CSV, for a spreadsheet                                                                     |
 
-| Tool                                             | Answers                                                                           |
-| ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `ab_list_categories` · `ab_list_category_groups` | the category tree                                                                 |
-| `ab_list_budget_months`                          | which months exist                                                                |
-| `ab_get_budget_month`                            | one month: budgeted, spent, balance, carryover — per category                     |
-| `ab_get_category_spend`                          | one category across a date range, from the app's own aggregation                  |
-| `ab_list_budget_gaps`                            | categories with spending and **no budget entry** — the §10 rule, made into a tool |
+**Categories and the budget (7, read)**
 
-**Reference data (4, read)**
+| Tool                           | Answers                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `ab_list_categories`           | with `include_hidden`, `group_id`                                                                    |
+| `ab_list_category_groups`      | the group tree                                                                                       |
+| `ab_list_budget_months`        | which months exist, and the data bounds                                                              |
+| `ab_get_budget_month`          | one month: `budgeted`, `spent`, `balance`, `carryover` per category, plus `to_budget` and the totals |
+| `ab_get_category_spend`        | one category across a range, from the app's own aggregation                                          |
+| `ab_list_budget_gaps`          | categories with spending and **no budget entry** — §10.2's rule, made into a tool                    |
+| `ab_check_budget_templates`    | parse every `#template` goal note and report every one that does not parse. Read-only                |
 
-`ab_list_payees` · `ab_list_tags` · `ab_list_rules` · `ab_list_schedules`
+**Reference data (6, read)**
+
+| Tool                          | Answers                                                             |
+| ----------------------------- | ------------------------------------------------------------------- |
+| `ab_list_payees`              | `search`, `include_transfer` false, `common`                        |
+| `ab_list_orphaned_payees`     | payees with no transactions and no rule — the cleanup list          |
+| `ab_list_tags`                | with `include_hidden`                                               |
+| `ab_list_rules`               | `stage`, `payee_id`, `search`                                       |
+| `ab_list_schedules`           | `include_completed`, `upcoming_days`                                |
+| `ab_list_upcoming_schedules`  | what is due, and when, across all schedules                         |
+
+**Analytics (11, read) — where every total comes from**
+
+This family is the single most important thing in the catalogue, and it exists for one reason: so a
+model never adds two numbers together. Every one of these is an aggregation the engine performs
+(apis.mdx §10). All take `start`, `end`, `account_ids`, `category_ids`, `include_offbudget` (false)
+and `include_transfers` (false), and every response echoes the filters it applied.
+
+| Tool                            | Answers                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------- |
+| `ab_spending_by_category`       | the breakdown, by `interval` and `group_by`, optionally `top_n`                  |
+| `ab_income_vs_expense`          | in, out, net, per interval                                                       |
+| `ab_cash_flow`                  | opening, in, out, closing, per interval                                          |
+| `ab_net_worth`                  | assets, liabilities, net, per interval and per account                           |
+| `ab_category_trend`             | one category over time, with its own mean and median                             |
+| `ab_payee_leaderboard`          | who got the money                                                                |
+| `ab_budget_performance`         | budgeted vs spent vs balance per category per month, and the variance            |
+| `ab_list_recurring`             | detected subscriptions **with their evidence** and an annualised cost            |
+| `ab_get_runway`                 | liquid on-budget balance ÷ trailing average outflow, in months, with the basis named |
+| `ab_get_uncategorized_summary`  | the count and total of uncategorised, by account and by month                    |
+| `ab_list_anomalies`             | categories and payees far from their own trailing norm, **with the deviation**   |
+
+The last two rows of that table are detectors, not oracles, and their descriptions say so. They
+return evidence so the model can show its work instead of asserting a conclusion.
 
 **The query escape hatch (2, read)**
 
@@ -740,42 +932,107 @@ its verdict (§11.3).
 | `ab_query`           | one ActualQL query. Read-only-guarded server-side, single statement, row-capped, byte-capped, timed out |
 | `ab_describe_schema` | the tables and fields `ab_query` may name — so the model does not guess                                 |
 
-**Statements (7, read; 1 writes — see below)**
+`ab_describe_schema` is named in `ab_query`'s own description as the tool to call first, because a
+model that has read the schema writes a query that runs and a model that has not writes three that
+do not.
 
-`ab_scan_statements` · `ab_list_missing_statements` · `ab_extract_statements` ·
-`ab_list_statement_duplicates` · `ab_get_statement_rows` · `ab_plan_statement_import` ·
-`ab_describe_statement_map` — and `ab_apply_statement_import` (**write**). Detailed in §11.
+**Statements and ingest (10, read)**
 
-`ab_extract_statements` writes only into the staging directory under the statements root, never into
-the budget; it is classed **read** for the budget's write tier and has its own confirmation ceiling.
+| Tool                            | Answers                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| `ab_get_statement_manifest`     | what the archive says about itself: accounts, counts, date ranges, its own warnings   |
+| `ab_scan_statements`            | the tree, grouped and de-duplicated at the statement level                            |
+| `ab_list_missing_statements`    | which account-months have no statement                                                |
+| `ab_list_statement_duplicates`  | what both de-dupe layers collapsed, and the rule that collapsed each                  |
+| `ab_get_statement_rows`         | the staged rows for one account and range                                             |
+| `ab_describe_statement_map`     | the current statements→budget mapping, and what is unmapped                           |
+| `ab_extract_statements`         | raw mode only: PDF/sidecar → rows, into the staging directory                         |
+| `ab_plan_accounts`              | **§11.5** — create / link / ambiguous, per manifest row, with the reasoning           |
+| `ab_plan_statement_import`      | Actual's own dry run: new, already present, fuzzy matches — per account               |
+| `ab_plan_file_import`           | one file into one account — the "Import" button, previewed                            |
 
-**The write tier (5, write — off by default)**
+**Previews for writes (2, read)**
 
-| Tool                        | Changes                                       |
-| --------------------------- | --------------------------------------------- |
-| `ab_apply_statement_import` | runs a plan through Actual's importer (§11.4) |
-| `ab_add_transactions`       | adds transactions to one account              |
-| `ab_update_transaction`     | one transaction's fields                      |
-| `ab_set_budget_amount`      | one category's budgeted amount for one month  |
-| `ab_sync`                   | syncs with the sync server                    |
+| Tool                 | Answers                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `ab_preview_rule`    | which existing transactions a rule would match, **before** it is saved                         |
+| `ab_reconcile_plan`  | the engine's cleared balance vs the operator's figure, the difference, and the uncleared count |
 
-There is deliberately **no** `ab_delete_transaction`, no `ab_delete_account`, no
-`ab_close_account`, and no rule/schedule/category writer. Deleting the operator's financial records
-is a human act in a UI that can show them what is about to go. The machine plane has the routes; this
-catalogue does not expose them, and that is a decision, not an omission.
+These are read-tier on purpose. Authoring a rule and reconciling an account are the two places where
+a program most wants to see the consequence before committing, and neither preview needs the write
+tier to be on — so the operator can do the thinking on a day when writes are off.
+
+**The write tier (18, off by default)**
+
+| Tool                          | Changes                                                               |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `ab_apply_accounts`           | creates the accounts a manifest needs, and writes the map (§11.5)      |
+| `ab_apply_statement_import`   | runs a plan through Actual's importer (§11.5)                          |
+| `ab_apply_file_import`        | imports one file into one account                                      |
+| `ab_add_transactions`         | adds transactions to one account                                       |
+| `ab_update_transaction`       | one transaction's fields, including its splits                         |
+| `ab_categorize_transactions`  | sets a category on a named set or a filter, under a ceiling            |
+| `ab_set_budget_amount`        | one category's budgeted amount, or its carryover, for one month        |
+| `ab_cover_overspending`       | moves money from one category to a category that went negative         |
+| `ab_transfer_category_budget` | moves budgeted money between two categories, or out of To Budget       |
+| `ab_copy_previous_budget`     | last month's budget into this one                                      |
+| `ab_set_budget_to_average`    | an N-month average into this month, for all or named categories        |
+| `ab_apply_goal_templates`     | applies the `#template` notes for a month                              |
+| `ab_add_rule`                 | creates a rule (after `ab_preview_rule`, which its description names)  |
+| `ab_run_rules`                | runs the rules engine over a named set or a filter, under a ceiling    |
+| `ab_merge_payees`             | collapses duplicate payees into one                                    |
+| `ab_reconcile_apply`          | marks the cleared set reconciled and, if asked, creates **one** visible adjustment |
+| `ab_sync`                     | syncs with the sync server                                             |
+| `ab_undo`                     | reverses the last change — **the most important write tool here**      |
+
+**`ab_undo` is not an afterthought.** An agent that can write must be an agent that can be
+un-written, and the tool exists so the answer to "that wasn't what I meant" is one call rather than
+a support conversation. It is built in the same phase as the first write, never later.
+
+**What this catalogue deliberately does NOT have**, stated as decisions rather than omissions:
+
+| Not here                                         | Because                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Any `delete_` tool, of anything                  | Deleting the operator's financial records is a human act in a UI that can show them what is about to go. The machine plane has the routes, at the admin tier; this server is never given that tier |
+| `ab_create_account` as a standalone              | Accounts are created from a manifest plan (`ab_plan_accounts` → `ab_apply_accounts`) so the on-budget/off-budget decision is always explicit and always reviewed. A one-off account is a UI click |
+| `ab_link_bank_account`                           | An OAuth consent flow. A program driving it is a program phishing the operator (apis.mdx §8.8) |
+| Anything touching the encryption key or password | Changing it can lock the operator out of every device                                          |
+| `ab_load_budget`                                 | Switching the open budget changes what every other tool answers about. It is a footgun aimed at §3's whole problem, and it is a UI action |
+| `ab_rotate_key`                                  | §9.8                                                                                          |
+| `ab_delete_budget`, `ab_restore_backup`          | Admin tier. Not reachable from here by construction, not by policy                            |
+
+### 9.5a The catalogue is large, and that has a cost
+
+Sixty-eight tool definitions is real context. Three things keep it affordable, and they are
+requirements rather than hopes:
+
+1. **Descriptions are one sentence plus the four clauses of §9.2**, and nothing else. No argument
+   prose in the description — the JSON Schema carries that, and the schema is only read when the
+   model has already chosen.
+2. **Family names are in the tool names**, so scanning is cheap: every analytics tool is a noun a
+   person would say, every plan/apply pair is adjacent alphabetically, and the `ab_` prefix means a
+   single substring match finds the whole catalogue.
+3. **The instructions payload (§8.3) routes by family, not by tool.** It tells the model _"totals
+   come from the analytics family"_, which is one fact, rather than eleven tool names it would have
+   to hold.
+
+The alternative — a handful of mega-tools with a `mode` argument — was considered and rejected. It
+trades a listing the model reads once for a dispatch it gets wrong every time, it makes the tier of
+a call depend on an argument rather than on the tool, and it destroys §9.2's second clause: a tool
+that sometimes writes cannot honestly say what it costs.
 
 ### 9.6 Permutation matrix — every call shape that exists
 
-| Dimension    | Values                                                                              |
-| ------------ | ----------------------------------------------------------------------------------- |
-| Tier         | read (34) · write (5)                                                               |
-| Target       | local (default) · remote (read-only, `https:` only, `ABMCP_ALLOW_REMOTE=1`)         |
-| Write tier   | server off (default) · server on + `ABMCP_ALLOW_WRITE=1`                            |
-| Confirmation | not required (read) · `confirm` string echo required (write)                        |
-| Ceiling      | `max_changes` (write only; default 200; exceeding it refuses and reports the count) |
-| Dry run      | `dry_run: true` **is the default on every write tool**                              |
-| Truncation   | `truncated: true` + `limit_applied` whenever a cap bound the result                 |
-| Result       | `ok: true` + `data` · `ok: false` + `error` with `isError: true`                    |
+| Dimension    | Values                                                                                                                                                                                                                                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tier         | read (50) · write (18) — 68 total, agreeing with §1, the Goal and §9. **`admin` is not a value**: this server is never given that tier, so no argument and no configuration can produce an admin call |
+| Target       | local (default) · remote (read-only, `https:` only, `ABMCP_ALLOW_REMOTE=1`)                                                                                                                                                                                                                                                                                |
+| Write tier   | server off (default) · server on + `ABMCP_ALLOW_WRITE=1`                                                                                                                                                                                                                                                                                                   |
+| Confirmation | not required (read) · `confirm` string echo required (write)                                                                                                                                                                                                                                                                                               |
+| Ceiling      | `max_changes` (write only; default 200; exceeding it refuses and reports the count)                                                                                                                                                                                                                                                                        |
+| Dry run      | `dry_run: true` **is the default on every write tool that has a meaningful dry run**, which is sixteen of the eighteen. **`ab_sync` and `ab_undo` have none**: a sync has nothing to preview and undo's preview *is* the thing itself, so neither takes a `dry_run` and neither schema offers one rather than accepting a flag it would ignore |
+| Truncation   | `truncated: true` + `limit_applied` whenever a cap bound the result                                                                                                                                                                                                                                                                                        |
+| Result       | `ok: true` + `data` · `ok: false` + `error` with `isError: true`                                                                                                                                                                                                                                                                                           |
 
 A shape not in this table does not exist. In particular: there is no write that skips the confirm,
 no write against a remote target, and no unlimited result.
@@ -788,8 +1045,11 @@ Three independent things must be true before one transaction changes:
 2. **This MCP's write tier is enabled** — `ABMCP_ALLOW_WRITE=1` in the registration or the
    environment.
 3. **The call passes `dry_run: false` and a `confirm` string that echoes the plan's own
-   `confirm_token`**, which the matching `plan_` call returned. A model cannot invent it; it has to
-   have read the plan.
+   `confirm_token`**, which the matching `plan_` call — or the tool's own dry run — returned. A
+   model cannot invent it; it has to have read the plan. The token expires in ten minutes and
+   carries a fingerprint of the exact change set, so a plan the operator approved an hour ago
+   against a budget that has since moved is refused with the **new** counts rather than applied
+   (apis.mdx §7.3).
 
 Plus a ceiling: `max_changes`, default 200. A call that would change more is refused, and the refusal
 **reports the number it would have changed** — so the operator learns the real size rather than
@@ -863,22 +1123,40 @@ will be wrong tomorrow, and the model cannot supply the date if we did not send 
 
 ## 11. The statements tools and the de-duplication contract
 
-The bank-statement pipeline is specified in full in [cli.mdx §10](./cli.mdx#10-the-statements-pipeline--abx-statements).
-This section is the MCP's view of it: the tools, and the three contracts a model must not be allowed
-to break.
+The ingest plane is specified in full in [apis.mdx §11](./apis.mdx#11-the-ingest-plane--statements-into-the-budget),
+and the operator-facing pipeline in [cli.mdx §10](./cli.mdx#10-the-statements-pipeline--abx-statements).
+This section is the MCP's view: the tools, and the contracts a model must not be allowed to break.
+
+**Two modes, and the model must know which it is in.** A `prepared` archive already holds importable
+files (`.ofx` and friends) and a manifest describing them; a `raw` archive is statement PDFs.
+`ab_get_statement_manifest` is the tool that tells them apart, and it is the **first** call of any
+import conversation — because in `prepared` mode the extraction step does not exist, the bank's own
+`FITID` is already the dedupe key, and a model that reaches for `ab_extract_statements` there is
+about to spend twenty minutes re-deriving something it already has.
 
 ### 11.1 The tools
 
 | Tool                           | Tier          | What it does                                                                                                                                                                |
 | ------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ab_scan_statements`           | read          | walks the configured statements root; returns entity/bank/account/period groups with counts, and flags missing months, duplicate scans and unreadable PDFs. Changes nothing |
-| `ab_list_missing_statements`   | read          | just the gaps, as `{entity, bank, account, period}` records                                                                                                                 |
-| `ab_extract_statements`        | read (budget) | turns PDFs and their sidecars into rows in the staging directory. Never touches the budget                                                                                  |
+| `ab_get_statement_manifest`    | read          | **call this first.** What the archive says about itself: mode, accounts, transaction counts, date ranges, and its own warnings (unreconciled statements, aggregate-only sources) |
+| `ab_scan_statements`           | read          | walks the configured statements root; returns entity/institution/account/period groups with counts, and flags missing months, duplicate scans and unreadable files. Changes nothing |
+| `ab_list_missing_statements`   | read          | just the gaps, as `{entity, institution, account, period}` records                                                                                                          |
+| `ab_extract_statements`        | read (budget) | **raw mode only.** Turns PDFs and their sidecars into rows in the staging directory. Never touches the budget, and never writes into the operator's archive                  |
 | `ab_list_statement_duplicates` | read          | every group with more than one member, the verdict, **and the rule that decided it**                                                                                        |
 | `ab_get_statement_rows`        | read          | the de-duplicated rows for one account-month. Parsed rows only — **never the raw statement text** (§7.4)                                                                    |
-| `ab_describe_statement_map`    | read          | the shape of the map file that connects the tree to budget accounts, and which mappings currently resolve                                                                   |
+| `ab_describe_statement_map`    | read          | the map file that connects the tree to budget accounts, and which mappings currently resolve                                                                                |
+| `ab_plan_accounts`             | read          | create / link / ambiguous per manifest row, with the reasoning and the on-budget decision (§11.4)                                                                           |
+| `ab_apply_accounts`            | **write**     | creates them in one batch and writes the map                                                                                                                                |
 | `ab_plan_statement_import`     | read          | the full plan: extracted, after de-dupe, already present, fuzzy matches, new. Returns a `confirm_token`. Changes nothing                                                    |
 | `ab_apply_statement_import`    | **write**     | runs the plan through the app's importer                                                                                                                                    |
+| `ab_plan_file_import`          | read          | one file into one account — the UI's "Import" button, previewed                                                                                                             |
+| `ab_apply_file_import`         | **write**     | …and applied                                                                                                                                                                |
+
+**The archive is read-only, and the model is told so in three separate tool descriptions.** It is
+audit evidence. Nothing in this catalogue writes into it; the only filesystem writes are into a
+staging directory that is rebuildable at any time, and if that directory would collide with a
+directory the archive already owns, the API refuses with `conflict` rather than staging over
+somebody's decade of statements.
 
 ### 11.2 The de-duplication contract, as the model sees it
 
@@ -907,11 +1185,62 @@ We never make that call ourselves, and no tool exposes a way to override it. If 
 "already there" diverged from the app's, the agent would create rows the UI insists are not
 duplicates, and reconciling that by hand is a weekend of the operator's life.
 
+**`ab_plan_statement_import` is that same importer run with `dryRun: true`** — Actual's own preview,
+which performs the full reconciliation (id lookup, rules, fuzzy matching) and returns what it _would_
+do without writing. So the plan the model reads is not our prediction of the authority's verdict; it
+**is** the authority's verdict, and `plan` and `apply` differ by one boolean. See
+[cli.mdx §10.8](./cli.mdx#108-stage-7--plan-and-apply).
+
+**The importer options are pinned, and two of the defaults would hurt the operator**
+([cli.mdx §10.6c](./cli.mdx)). The one the model must be able to explain is `reimportDeleted`, which
+**defaults to `true`** and would re-add any transaction the operator deleted in the UI on the next
+run. We pass `false`. The consequence for the catalogue is a rule, not a footnote:
+
+> **No tool argument can turn it back on.** `ab_apply_statement_import` has no `reimport_deleted`
+> field. Resurrecting records the operator deliberately deleted is not something an agent should be
+> able to do on a persuasive sentence, however well-reasoned — it is `abx statements
+apply --reimport-deleted --yes`, typed by a human, or it does not happen. This is the same
+> boundary as §9.5's missing delete tools, drawn from the other side: **the catalogue refuses to
+> un-delete for the same reason it refuses to delete.**
+
+If a model is asked why a row it expected did not import, `ab_plan_statement_import` reports it as
+matched-and-ignored, and the tool description's third clause says to tell the operator the row was
+deleted in the app and name the CLI command.
+
 Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/api/methods.ts` — `importTransactions()` (exists today — the reconciliation authority)
 Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/dedupe.ts` — `dedupeStatements()`, `dedupeRows()`
 Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/tools/statements.ts` — the eight tool definitions above
 
-### 11.4 The plan is recomputed at apply time
+### 11.4 Provisioning the accounts first — `ab_plan_accounts` / `ab_apply_accounts`
+
+An archive is useless against an empty budget, and "create twenty-seven accounts" is the step that
+stands between the operator and every interesting question. It is its own plan/apply pair, and it
+is the one place the model is allowed near account creation.
+
+`ab_plan_accounts` reads the archive's manifest and the budget's existing accounts, and returns one
+decision per manifest row — `create`, `link`, `skip` or `ambiguous` — each with its reasoning, its
+proposed name, and its proposed on-budget flag. It **creates nothing**.
+
+Three things the model must do with that plan, and its description says all three:
+
+1. **Show every `ambiguous` row by name and stop.** `ambiguous` is the API refusing to guess — two
+   accounts sharing a last-four across two entities is the normal case in a real archive, not an
+   edge one. A model that resolves it on the operator's behalf has just given one entity's decade
+   to another.
+2. **Read out every off-budget decision.** A brokerage or loan account marked on-budget turns market
+   movement into budgetable income and quietly wrecks every report from then on. It is the single
+   most expensive mistake available at this step, it is invisible for months, and it is one line to
+   confirm.
+3. **Never propose a name of its own.** The naming template is the API's, it carries the entity and
+   the last four so a human can check a row against a paper statement in one glance, and it is
+   stable — so a re-run yields `link`, not a second set of accounts with `(2)` on the end.
+
+`ab_apply_accounts` takes the token, creates the accounts in one batch, and **writes the map**
+beside the statements, so the very next `ab_plan_statement_import` has a complete mapping. The
+operator never hand-writes a YAML file of twenty-seven account ids, which is the step that
+otherwise ends the project.
+
+### 11.5 The plan is recomputed at apply time
 
 `ab_apply_statement_import` does **not** replay the plan it was given. It recomputes against the
 budget as it is now, and if the new plan differs from the `confirm_token`'s, it **refuses** with
@@ -1014,6 +1343,7 @@ Nothing in this table is a silent success, and nothing is a silent cap.
 | `ABMCP_MAX_ROWS`         | `1000`                              | the row cap; results are clamped, never rejected                                     |
 | `ABMCP_MAX_BYTES`        | `1048576`                           | the response byte cap                                                                |
 | `ABMCP_TIMEOUT_MS`       | `30000`                             | per-call timeout. `ab_extract_statements` and `ab_apply_statement_import` are exempt |
+| `ABMCP_PROMPT_FILE`      | — (uses the generated constant)     | dev override: read the instructions prose from this path instead (§8.3)              |
 | `ABMCP_LOG_LEVEL`        | `info`                              | `error` · `warn` · `info` · `debug`                                                  |
 | `ABMCP_LOG_DIR`          | `~/T/_actual_budget`                | where `mcp.info` / `mcp.err` go                                                      |
 | `ABX_STATEMENTS_DIR`     | —                                   | shared with the CLI; the statements root, if not set in the credentials file         |
@@ -1084,6 +1414,8 @@ Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/audit.ts` — `auditLine()`,
 | **stdout-purity canary**   | greps the **built** `dist/` for `console.log(`, `console.info(`, `process.stdout.write(`                                                                                                                                                         |
 | **no-network canary**      | greps the built bundle for any host literal other than `127.0.0.1`/`localhost`, and for `child_process`, `node:child_process`, `eval(`; asserts exactly one module opens a socket                                                                |
 | **no-fs-write canary**     | asserts the bundle imports no `fs.write*`, `writeFile`, `mkdir`, `rm` outside the logger and the credential minter                                                                                                                               |
+| **origin-gate canary**     | with a **valid** key: `Origin: https://evil.example` → 404; `Sec-Fetch-Site: cross-site` → 404; a `Host` outside the allowlist → 404. From a non-loopback socket with `trust proxy` set: `X-Forwarded-For: 127.0.0.1` → 404 (T14, T15)           |
+| **Canary/threat parity**   | the `Canary` column of §7.0 and the files in `src/canary/` agree in both directions; a row may opt out only with `—` and a stated reason                                                                                                         |
 | **Catalogue tests**        | every tool has all four description clauses; every name matches `^ab_[a-z_]+$`; every verb is in the closed set; every amount field is `"type":"integer"` with "cents" in its description; `tools/list` and dispatch agree, both directions      |
 | **Gate tests**             | each of the six gates, denied and allowed; a write with the tier off, with the tier on but no confirm, with a stale confirm, and over the ceiling                                                                                                |
 | **Auth negatives**         | no key → refuses to start; `0644` file → refuses to start; wrong key → `unauthorized`; non-loopback target without `ABMCP_ALLOW_REMOTE` → refuses to start; remote + write → refuses                                                             |
@@ -1092,7 +1424,7 @@ Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/audit.ts` — `auditLine()`,
 | **Envelope tests**         | every success carries `budgetId`, `budgetName`, `target`, `asOf`; every failure carries a code from the closed twelve                                                                                                                            |
 | **Integration**            | a real sync server on an ephemeral port with a temp state dir, temp credentials, and the synthetic statements fixture tree from [cli.mdx §18](./cli.mdx#18-testing)                                                                              |
 | **Determinism**            | `ab_plan_statement_import` twice over the fixture tree returns an identical plan and an identical `confirm_token`; after an apply, the next plan reports zero new                                                                                |
-| **Instructions freshness** | the checked-in `src/instructions.ts` matches what `MCP_prompt.prompt` generates                                                                                                                                                                  |
+| **Instructions freshness** | the checked-in `src/instructions.ts` matches what `ai/mcp_prompt.md` generates; a missing or empty prompt file **fails the build** rather than shipping an empty instructions block                                                              |
 
 ---
 
@@ -1145,6 +1477,102 @@ need two switches and a token the string cannot produce.
 **UC-12 — A second operator on a shared Mac.** They can reach `:5006` on loopback, but cannot read
 the `0600` credentials file, so every call is `401`. The audit line records the denial and the gate.
 
+### 18.1 What people actually type
+
+The twelve above are the system's behaviours. This section is the other half of the design work:
+**the sentences an operator actually types into Claude Code**, and the tool sequence each one has to
+become. They are the acceptance tests for the catalogue's shape — a sentence here with no clean
+sequence is a missing tool, and a sentence that needs the model to compute anything is a missing
+route in [apis.mdx](./apis.mdx).
+
+They are grouped by what the operator is really doing, because that is how the instructions payload
+(§8.3) organises its playbooks.
+
+**Getting started — the first evening**
+
+| They type                                                       | Sequence                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| "set up my budget from my bank statements"                      | `ab_whoami` → `ab_get_statement_manifest` → `ab_plan_accounts` → **stop** → `ab_apply_accounts` → `ab_plan_statement_import` → **stop** → `ab_apply_statement_import` → verify |
+| "what's in my statement archive?"                               | `ab_get_statement_manifest` — answered without touching the budget at all                                     |
+| "which months am I missing statements for?"                     | `ab_list_missing_statements`                                                                                  |
+| "import the files I downloaded from my bank this morning"         | `ab_plan_file_import` → `ab_apply_file_import`                                                                |
+| "did that import actually work?"                                | `ab_get_account_properties` per account + `ab_get_uncategorized_summary`                                       |
+| "start me a budget for next month"                              | `ab_list_budget_months` → `ab_get_budget_month` → `ab_set_budget_to_average` (dry run) → apply                |
+
+**Understanding where the money went — the daily bread**
+
+| They type                                                       | Sequence                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| "where did my money go last month?"                             | `ab_spending_by_category` + `ab_payee_leaderboard`                                                            |
+| "where is my money going?" (no period)                           | resolve to the last full month, **say so**, then as above                                                     |
+| "how much do I spend on groceries, really?"                     | `ab_category_trend` — the mean and median matter more than any single month                                   |
+| "what did I spend at Amazon this year?"                         | `ab_payee_leaderboard` scoped, or `ab_list_transactions` with `payee_id`                                       |
+| "am I spending more than last year?"                            | `ab_income_vs_expense` over both, `interval=year`                                                             |
+| "what subscriptions am I paying for?"                           | `ab_list_recurring` — reported with its evidence, never as a bare claim                                       |
+| "am I paying for anything twice?"                               | `ab_list_recurring` + `ab_payee_leaderboard`; duplicates surface as two near-identical recurring items        |
+| "did my net worth go up this year?"                             | `ab_net_worth`, `interval=month`, with the market-movement caveat stated                                      |
+| "how's my cash flow?"                                           | `ab_cash_flow`                                                                                                |
+| "anything weird this month?"                                    | `ab_list_anomalies` + `ab_list_budget_gaps` + `ab_get_uncategorized_summary`                                  |
+| "why is my utilities bill so high?"                             | `ab_get_budget_month` → `ab_category_trend` → `ab_list_transactions` sorted by amount                         |
+| "what's my biggest expense I'm not thinking about?"             | `ab_spending_by_category` with `top_n`, then `ab_category_trend` on the surprise                              |
+| "how long could I last if I stopped working?"                   | `ab_get_runway`, with the basis and the assumption said out loud                                              |
+| "show me every transaction over $500 since June"                | `ab_list_transactions` with `min_amount` and `start`                                                          |
+| "what did I spend on the trip in August?"                       | `ab_list_transactions` with `tag` if they tag, otherwise date range + `ab_spending_by_category`                |
+
+**Keeping the books straight — the weekly hour**
+
+| They type                                                       | Sequence                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| "what haven't I categorised?"                                   | `ab_get_uncategorized_summary` → `ab_list_uncategorized` grouped by payee                                     |
+| "categorise all the Whole Foods ones as Groceries"              | `ab_preview_rule` → **stop** → `ab_add_rule` → `ab_run_rules` (dry run) → apply                               |
+| "just fix these five"                                           | `ab_categorize_transactions` with explicit ids, previewed                                                     |
+| "my payee list is a mess"                                       | `ab_list_payees` → `ab_list_orphaned_payees` → `ab_merge_payees` (dry run) → apply                            |
+| "reconcile my checking — it says $4,211.08"               | `ab_reconcile_plan` → if non-zero, **hunt the difference first** → only then `ab_reconcile_apply`             |
+| "these two are the same transaction"                            | `ab_get_transaction` ×2 → the merge tool, previewed                                                           |
+| "split that grocery run — half was for the office"              | `ab_get_transaction` → `ab_update_transaction` with `subtransactions`                                         |
+| "what rules do I have?"                                         | `ab_list_rules`                                                                                               |
+| "would this rule break anything?"                               | `ab_preview_rule` — the entire reason it is read-tier                                                         |
+| "what's coming up?"                                             | `ab_list_upcoming_schedules`                                                                                  |
+
+**Budgeting — the monthly ritual**
+
+| They type                                                       | Sequence                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| "build next month's budget from the last six months"            | `ab_get_budget_month` ×2 → `ab_list_budget_gaps` → `ab_set_budget_to_average` (dry run) → apply → check To Budget |
+| "same as last month"                                            | `ab_copy_previous_budget`, previewed                                                                          |
+| "I overspent dining — cover it from fun money"                  | `ab_get_budget_month` → `ab_cover_overspending`                                                               |
+| "move $200 from travel to home repair"                          | `ab_transfer_category_budget`                                                                                 |
+| "I have money left over — put it in savings"                    | `ab_get_budget_month` (read To Budget) → `ab_transfer_category_budget`                                        |
+| "what am I spending on that I never budgeted for?"              | `ab_list_budget_gaps` — the §10.2 rule as a single answer                                                     |
+| "am I hitting my budget?"                                       | `ab_budget_performance` over the months                                                                       |
+| "apply my goal templates"                                       | `ab_check_budget_templates` → `ab_apply_goal_templates` (dry run) → apply                                      |
+| "why doesn't my budget add up?"                                 | `ab_get_budget_month` — usually a negative To Budget, which is the headline, not a footnote                   |
+| "set everything to zero and let me start again"                 | a write with a large blast radius: preview, count, **confirm explicitly**, then apply                         |
+
+**When it goes wrong**
+
+| They type                                                       | What happens                                                                                                 |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| "undo that"                                                     | `ab_undo`, and the model reports **what** was undone rather than just "done"                                  |
+| "that number's wrong"                                           | the model shows the rows behind it and the filters it applied — never re-derives the number a second way      |
+| "why is that different from what the app shows?"                | `ab_whoami` first: nine times in ten it is a different budget or a different date range, and both are in `meta` |
+| "did you change anything?"                                      | the model can answer from the session; the durable answer is the audit file, and it says so                   |
+| "that imported into the wrong account"                          | `ab_undo` if it was the last thing; otherwise the honest answer is that unwinding an import is a UI job       |
+
+### 18.2 The three shapes that are not allowed
+
+Recorded here because each one is a plausible-looking sequence that must never appear:
+
+1. **`ab_list_transactions` followed by the model adding the amounts.** Any total has a tool. If
+   the total the operator wants has no tool, the correct output is _"there's no route for that yet"_
+   plus the closest thing — never a sum.
+2. **A write with no preview shown to the operator.** The token makes it technically impossible to
+   write without *fetching* a preview; it cannot make the model *show* one. That is the payload's
+   job (§8.3), it is stated three times there, and it is what UC-6's two stop points are.
+3. **Chaining a second write off a first without reporting.** Each write is reported and verified
+   before the next is proposed. An agent that applies four writes and then summarises has removed
+   every place the operator could have said stop.
+
 ---
 
 ## 19. Acceptance criteria
@@ -1158,9 +1586,13 @@ the `0600` credentials file, so every call is `401`. The audit line records the 
    sentence is §3.4 layer 5 verbatim.
 5. `grep -rE "console\.log\(|process\.stdout\.write\(" mcp/dist/` returns nothing.
 6. The built bundle contains no host literal other than loopback, and no `child_process` import.
-7. Every one of the 33 tools carries all four description clauses; every name matches `^ab_[a-z_]+$`;
+7. Every one of the 68 tools carries all four description clauses; every name matches `^ab_[a-z_]+$`;
    `tools/list` and dispatch agree in both directions.
-8. With the write tier off, all five write tools are **listed**, and every call to one returns
+7a. **Every tool maps to exactly one route in [apis.mdx](./apis.mdx)**, and every route that spec's
+   §9 coverage matrix marks ✅ either has a tool or appears in §9.5's omissions table with a reason.
+   Asserted from a committed fixture, in both directions.
+7b. **Every `ab_` name mentioned in `ai/mcp_prompt.md` exists in the catalogue** (§8.3).
+8. With the write tier off, all 18 write tools are **listed**, and every call to one returns
    `write_disabled` naming both switches.
 9. With both switches on, a write without a `confirm` token returns `confirm_required`; with a stale
    token, `conflict`; over the ceiling, `too_many_changes` **with the real count**.
@@ -1179,6 +1611,23 @@ the `0600` credentials file, so every call is `401`. The audit line records the 
     hashed args and allowlisted scalars.
 17. `mcp/` never appears under `packages/`, and `packages/cli` is unmodified by any change made under
     this spec.
+18. With a **valid** key, a call carrying `Origin: https://evil.example` or
+    `Sec-Fetch-Site: cross-site` returns `404`; from a non-loopback socket,
+    `X-Forwarded-For: 127.0.0.1` returns `404` with `trust proxy` configured (T14, T15).
+19. The `Canary` column of §7.0 and the files in `src/canary/` agree in both directions.
+20. No tool schema anywhere accepts a `reimport_deleted` argument; a transaction deleted in the app
+    is never re-added by any tool call (§11.3).
+21. `ab_sync` and `ab_undo` have no `dry_run` field in their schemas; the other sixteen write tools
+    default it to `true` (§9.6).
+21a. No analytics tool returns a float, a percentage or a ratio; a share is returned as its two
+    integers and the rendering layer divides.
+21b. `ab_plan_accounts` over a fixture manifest containing two accounts that share a last-four
+    across two entities returns exactly one `ambiguous` and zero silent creates; run again after
+    `ab_apply_accounts`, every row is `link`.
+21c. `ab_undo` after every write tool restores the budget to a byte-identical state, asserted by a
+    full-table hash.
+22. The error vocabulary here is a strict superset of the machine plane's nine
+    ([cli.mdx §5.3](./cli.mdx)), and the three extra codes are never produced by a route.
 
 ---
 
@@ -1188,15 +1637,22 @@ the `0600` credentials file, so every call is `401`. The audit line records the 
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------- |
 | **P1 — the spine**                 | `mcp/` layout, stdio transport, `Server` + explicit handlers, logger, banner, the two purity canaries, `ab_whoami` | AC 1, 4, 5, 6    |
 | **P2 — the key and the gates**     | `credentials.ts`, the six gates, `ab_health`, the refuse-to-start paths                                            | AC 2, 3          |
-| **P3 — the instructions pipeline** | `MCP_prompt.prompt`, the build-time generator, the freshness test, the routing redirects                           | AC 4, 13         |
-| **P4 — the read catalogue**        | accounts, transactions, categories, budget, reference data                                                         | AC 7, 10, 11, 12 |
-| **P5 — the query hatch**           | `ab_query`, `ab_describe_schema`, the server-side guard                                                            | T4               |
-| **P6 — statements, read**          | the seven read statements tools                                                                                    | AC 14, 15        |
-| **P7 — the write tier**            | the five write tools, both switches, the confirm echo, the ceiling                                                 | AC 8, 9          |
-| **P8 — hardening**                 | the audit line and its PII rules, every remaining canary, the full integration suite                               | AC 16, 17        |
+| **P3 — the instructions pipeline** | `ai/mcp_prompt.md`, the build-time generator, the freshness test, the `ABMCP_PROMPT_FILE` override, the routing redirects | AC 4, 13, 7b |
+| **P4 — the read catalogue**        | orientation, accounts, transactions, categories, budget, reference data — 25 tools                                 | AC 7, 10, 11, 12 |
+| **P5 — the analytics family**      | all 11. **This is the phase that makes the server useful**, and it is deliberately before writes                  | AC 21a           |
+| **P6 — the query hatch**           | `ab_query`, `ab_describe_schema`, the server-side guard                                                            | T4               |
+| **P7 — statements, read**          | the ten read ingest tools, including `ab_get_statement_manifest` and `ab_plan_accounts`                            | AC 14, 15, 21b   |
+| **P8 — the write tier**            | the confirm protocol, then `ab_apply_accounts`, `ab_apply_statement_import`, `ab_sync` and **`ab_undo`** — undo ships with the first write, never later | AC 8, 9, 21c |
+| **P9 — the budget writers**        | `ab_set_budget_amount`, cover, transfer, copy, averages, goal templates                                            | AC 8, 9          |
+| **P10 — the bookkeeping writers**  | rules (`ab_preview_rule` first), categorize, merge payees, reconcile, transaction edits                            | AC 8, 9          |
+| **P11 — hardening**                | the audit line and its PII rules, every remaining canary, the full integration suite                               | AC 16, 17        |
 
 P1–P3 are the ones that must be right. A server whose stdout is clean, whose key is refused when it
 should be, and whose routing sentence reaches the model is a server whose later tools are ordinary.
+
+**P4 + P5 is the shippable milestone.** Thirty-six read tools with the analytics family in them
+answers every question in §18.1's first two groups, cannot change anything, and is worth using on
+its own. Everything after it is additive. Ship there, then keep going.
 
 ---
 
@@ -1208,17 +1664,27 @@ should be, and whose routing sentence reaches the model is a server whose later 
    enforced against the built bundle.
 4. Capabilities are `{ tools: {} }`; every `prompts/*` and `resources/*` request answers `-32601`.
 5. The machine key is the CLI's key, same file, same `0600`, same mint-if-missing, same atomic merge
-   — and this server **refuses to start** without one, or with a file it does not like.
+   — and this server **refuses to start** without one, or with a file it does not like. The key is a
+   wall, not a formality: the loopback gate stops other computers, the key stops other origins and
+   other users on this one (§6.2).
 6. This process opens sockets to `127.0.0.1` only, imports no `child_process`, and writes no file
    outside its log directory and the one-time key mint.
 7. The server computes nothing. Every number is the app's, returned verbatim.
 8. Money is integer cents in every field; `budgeted: null` is never `0`; every balance carries its
    cutoff.
 9. Writes need the server's tier **and** this side's switch **and** a `confirm` token from a `plan_`
-   call, and are bounded by `max_changes`; `dry_run` is the default.
+   call or a dry run, and are bounded by `max_changes`; `dry_run` is the default.
+9a. Every tool is exactly one route in [apis.mdx](./apis.mdx). A tool that would need a second call
+    is two tools or one new route — never a fan-out here.
+9b. This server is never granted the admin tier, and no argument or configuration can produce an
+    admin call.
 10. There is no tool that deletes a transaction, an account, a category, a rule or a schedule.
+10a. `ab_undo` exists, ships in the same phase as the first write tool, and reports **what** it
+    undid rather than only that it succeeded.
 11. De-duplication is the server's and deterministic; **`importTransactions` is the sole authority on
-    what already exists**; no tool lets the model override it or judge a duplicate.
+    what already exists**; no tool lets the model override it or judge a duplicate. `plan_` is that
+    same importer with `dryRun: true`, and no tool argument can re-add a transaction the operator
+    deleted.
 12. No raw statement text, no full account number, no foreign product's credentials, ever.
 13. Caps clamp and say so; nothing is silently truncated, and no error is a thrown protocol error.
 14. The audit line hashes arguments, logs an allowlist of non-PII scalars, and never logs money.
@@ -1228,8 +1694,14 @@ should be, and whose routing sentence reaches the model is a server whose later 
 
 ## 22. Related specs
 
-- [cli.mdx](./cli.mdx) — the CLI. Same key, same machine plane, same engine; the machine plane's
-  route table is §5 there, the statements pipeline §10, the key §4.
+- **[apis.mdx](./apis.mdx) — the machine-plane API. The contract this server is written against, and
+  the authority on every fact that appears on the wire.** A tool here is one route there. If a tool
+  seems to need a calculation, the calculation becomes a route in that spec first.
+- [ai/mcp_prompt.md](../ai/mcp_prompt.md) — the instructions payload this server sends at
+  `initialize` (§8.3): how the model is told to think about money, when to ask, how to plan, and how
+  to report.
+- [cli.mdx](./cli.mdx) — the CLI. Same key, same plane, same engine; the operator-facing statements
+  pipeline is §10 there, bring-up §3, output contracts §13.
 - [../AGENTS.md](../AGENTS.md) — the monorepo's rules: yarn from the root, typecheck before
   committing, the TypeScript and React conventions.
 - [../.github/agents/pr-and-commit-rules.md](../.github/agents/pr-and-commit-rules.md) — `[AI]`

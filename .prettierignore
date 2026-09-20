@@ -1,0 +1,7 @@
+# Plain-text prompt prose. These files are read in a text editor and by a model,
+# not rendered as Markdown: they use `*` bullets, `====` dividers and hanging
+# indentation on purpose. A Markdown formatter rewrites all three, so it is kept
+# away from them. Both oxfmt (the repo's formatter, via the pre-commit hook) and
+# prettier read this file.
+ai/**/*.md
+pm/prompts/*.md

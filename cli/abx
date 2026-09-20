@@ -1,0 +1,4 @@
+#!/bin/sh
+# abx — the operator CLI for this install of Actual Budget (pm/cli.mdx).
+# A shim, so `cli/` can go on PATH with only the callables in it.
+exec node "$(dirname "$0")/abx.mjs" "$@"

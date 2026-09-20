@@ -1,0 +1,20 @@
+{
+  "name": "abx-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "abx — the operator CLI for THIS install of Actual Budget. Ours, not @actual-app/cli. See pm/cli.mdx.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p code/tsconfig.json",
+    "typecheck": "tsc -p code/tsconfig.json --noEmit",
+    "test": "vitest --run --root code"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -14,6 +14,7 @@ We can make sure we don't prevent dupes. The bank statements might have dupes: m
 
 The directory below is for part of the management specification files on how everything is going to work.
 ~/BGit/Bryan_git/actual_budget_bryan/pm/
+apis.mdx
 cli.mdx
 mcp.mdx
 
@@ -22,3 +23,8 @@ The directory below is where the source code goes for a CLI (command-line interf
 
 Below is an MCP you can use. We'll have that as a node TypeScript MCP to work with Claude Code, so that way, from Claude Code, we can interact with that.
 ~/BGit/Bryan_git/actual_budget_bryan/mcp/
+
+This is the prompt file our MCP server should use to know about our APIs and how to interact with the user:
+~/BGit/Bryan_git/actual_budget_bryan/ai> ls
+mcp_prompt.md
+~/BGit/Bryan_git/actual_budget_bryan/ai>

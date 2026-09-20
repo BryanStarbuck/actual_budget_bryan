@@ -19,6 +19,7 @@ import * as secretApp from './app-secrets';
 import * as simpleFinApp from './app-simplefin/app-simplefin';
 import * as syncApp from './app-sync';
 import { config } from './load-config';
+import { initMachinePlane, machineRouter } from './machine/index.js';
 
 const app = express();
 
@@ -71,6 +72,25 @@ if (config.get('corsProxy.enabled')) {
 
 app.use('/admin', adminApp.handlers);
 app.use('/openid', openidApp.handlers);
+
+// The machine plane — pm/cli.mdx §5. Loopback-only, machine-key authenticated,
+// the surface `abx` and the MCP speak.
+//
+// Mounted HERE, with the other route mounts, and NOT further down: the
+// production branch below registers an SPA catch-all (`app.get('/{*splat}')`)
+// and the dev branch proxies everything to Vite. Express matches in
+// registration order, so a machine plane mounted after either one never runs —
+// /machine/v1/ping returns index.html with a 200 and the CLI reports a
+// successful response with no JSON body.
+//
+// It carries no key yet; initMachinePlane() arms it from run(), because
+// resolving the key mints one and that must not happen merely because this
+// module was imported. Until then it 404s (R9 — fail closed).
+//
+// It sets no Access-Control-Allow-Origin of its own and strips the one the
+// app-wide cors() above added: it is not a browser surface, and §4.4a's origin
+// gate refuses anything that looks like one.
+app.use('/machine/v1', machineRouter);
 
 app.get('/mode', (req, res) => {
   res.send(config.get('mode'));
@@ -214,6 +234,18 @@ export async function run() {
     } catch (err) {
       console.error(err);
     }
+  }
+
+  // Arm the machine plane mounted above. This is what resolves — and, on a
+  // first run, MINTS — the machine key, so it happens at boot rather than at
+  // import: importing this module must never write a secret into the
+  // developer's home directory as a side effect (pm/cli.mdx §4.3).
+  const machinePlane = initMachinePlane();
+  if (machinePlane) {
+    console.log(
+      `Machine plane armed on /machine/v1 (key ${machinePlane.keyFingerprint}, ` +
+        `writes ${machinePlane.allowWrite ? 'ENABLED' : 'disabled'})`,
+    );
   }
 
   if (config.get('https.key') && config.get('https.cert')) {

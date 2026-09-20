@@ -336,8 +336,27 @@ Every `abx` invocation that needs the machine plane begins with a liveness prefl
      `~/T/_actual_budget/server.log`, never `/tmp`;
    * **wait** for `/health`, bounded at 120 s, spinner running (§12).
 3. **If bring-up fails**, print the failure and the tail of `~/T/_actual_budget/server.log`, and
-   exit `2`. Never fall back to computing the answer locally — there is no local compute path (§5.4),
-   and a CLI that quietly answers from a different engine is worse than one that fails.
+   exit **`5`** (§14 — "the app could not be brought up"). Never fall back to computing the answer
+   locally — there is no local compute path (§5.4), and a CLI that quietly answers from a different
+   engine is worse than one that fails.
+
+**What the root justfile does NOT give us, verified against the recipe as it stands.** §3.1 step 2
+says the CLI achieves "the same result" as `setup` + `server`, and the gap between those two words
+and the current recipes is load-bearing, so it is written down rather than discovered:
+
+| The CLI needs                       | The `justfile` today                                                                                        | Who closes the gap               |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| A **detached** sync server          | `server:` runs `yarn start:server` in the **foreground**. Ctrl-C ends it; nothing survives the shell        | `bringup.ts` (and a new recipe)  |
+| `~/T/_actual_budget/server.log`     | **Does not exist.** Only `run` writes a log, and that log is `dev.log` — the Vite tree, not the sync server | `bringup.ts` creates and appends |
+| `~/T/_actual_budget/server.pid`     | **Does not exist.** Only `dev.pid` is recorded, and it is the Vite tree's                                   | `bringup.ts` writes it           |
+| A foreign-holder refusal on `:5006` | The refusal in `run` guards **`:3001`**, the web port. Nothing guards `:5006`                               | `bringup.ts` (mirroring `run`)   |
+| `abx stop` freeing `:5006`          | `just stop` kills the `dev.pid` tree and node processes on **`:3001` only**; `:5006` is left running        | `abx stop` (§3.3)                |
+
+So `server.log`, `server.pid` and the `:5006` port guard are **things this spec creates**, not things
+it inherits. §15 lists them as app-written because bring-up is what writes them; nothing writes them
+today. The root justfile gains a matching `server-bg` recipe so `just` and `abx` agree, and `just
+stop` is extended to `:5006` — otherwise an operator who alternates between the two tools ends up
+with two sync servers and blames the CLI.
 
 ### 3.2 What "up" means — three ports, one health gate (LOCKED)
 
@@ -454,16 +473,72 @@ Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/cre
   **`X-Actual-Machine-Key: <64 hex>`**. Never in a query string — a query string lands in access
   logs and shell history.
 - The server checks, **in this order, before any handler runs**:
-  1. **Loopback gate.** `req.socket.remoteAddress` must be `127.0.0.1` or `::1`, and the app must
-     not be behind a trusted proxy for this route. A non-loopback request gets **404**, not 403 —
-     off this machine, the machine plane does not exist, and an attacker learns nothing from probing
-     it.
-  2. **Key gate.** `crypto.timingSafeEqual` over equal-length buffers, **never `===`**. A length
+  1. **Loopback gate.** `req.socket.remoteAddress` must be `127.0.0.1`, `::1` or `::ffff:127.0.0.1`.
+     A non-loopback request gets **404**, not 403 — off this machine, the machine plane does not
+     exist, and an attacker learns nothing from probing it.
+  2. **Origin gate.** The request must not be cross-origin (§4.4a).
+  3. **Key gate.** `crypto.timingSafeEqual` over equal-length buffers, **never `===`**. A length
      mismatch still runs a fixed-length dummy comparison, because `timingSafeEqual` throws on
      unequal lengths and an unguarded call is itself a timing oracle.
-  3. **Mode gate.** Is this route available in this launch mode? Reads always; writes only when the
+  4. **Mode gate.** Is this route available in this launch mode? Reads always; writes only when the
      write tier is enabled (§5.2).
-  4. **Input gate.** The route's schema. Unknown keys stripped, limits clamped rather than rejected.
+  5. **Input gate.** The route's schema. Unknown keys stripped, limits clamped rather than rejected.
+
+### 4.4a Two things the surrounding Express app does that the gate must survive (LOCKED)
+
+The machine plane mounts inside an app that was built for a different threat model. Both of the
+following are true of `packages/sync-server/src/app.ts` **today**, and the gate is written against
+them rather than against an idealised server.
+
+**1. `app.set('trust proxy', …)` is global — so `req.ip` is attacker-controlled.** With a trusted
+proxy configured, Express derives `req.ip` and `req.ips` from the `X-Forwarded-For` header, which any
+client can send. A loopback check written as `req.ip === '127.0.0.1'` is therefore **not a check at
+all** under a deployment that trusts a proxy: a remote attacker spoofs the header and passes.
+
+> **The gate reads `req.socket.remoteAddress` and nothing else.** That is the kernel's view of the
+> peer, it cannot be forged by a header, and it is unaffected by `trust proxy`. `req.ip`,
+> `req.ips`, `X-Forwarded-For` and `X-Real-IP` are **never** consulted on this route. A unit test
+> sends a machine-plane request from a non-loopback socket carrying
+> `X-Forwarded-For: 127.0.0.1` and asserts `404`.
+
+**2. `app.use(cors())` is global and permissive — so "loopback" includes the operator's browser.**
+This is the correction that matters most, because it inverts a sentence that appears in both specs.
+`cors()` with no options reflects any origin. A page the operator visits at `https://evil.example`
+can issue `fetch('http://127.0.0.1:5006/machine/v1/…')`, and that request **arrives on the loopback
+interface** — the browser is on this machine. The loopback gate passes it.
+
+So the honest statement of the design is:
+
+> **The loopback gate stops other _computers_. The machine key stops other _origins and other
+> users_ on this one.** They are not redundant, and neither is decorative. A design note that says
+> "the key is not the wall; the loopback gate is" is wrong in the one case that is actually
+> reachable from the open internet — a web page.
+
+What saves us today is that the attacking page cannot read `~/.credentials/actual_budget.json`, so it
+cannot produce `X-Actual-Machine-Key`, and because that header is not a CORS-safelisted request
+header the browser must preflight — which a page cannot satisfy without the key either. That is a
+real defence, but it is one control deep, so the machine plane adds a second:
+
+- **The machine plane opts OUT of the app-wide `cors()`** and sets no `Access-Control-Allow-Origin`.
+  It is not a browser surface and has no reason to be reachable from one.
+- **A request carrying an `Origin` header is refused with `404`**, unless that origin is
+  `http://127.0.0.1:3001` / `http://localhost:3001` — our own UI — and even then only for read
+  routes. `abx`, the MCP and `curl` send no `Origin`; a browser always does. The header's presence
+  is the signal.
+- **`Sec-Fetch-Site: cross-site`, `same-site` or `none` is refused with `404`.** Modern browsers
+  send this and cannot be talked out of it; non-browser clients omit it.
+- The route sets `Vary: Origin` and `Cache-Control: no-store`, so nothing about a machine-plane
+  answer is cached anywhere by anything.
+
+**DNS rebinding is covered by the same gate.** An attacker who rebinds a hostname to `127.0.0.1`
+still reaches us from a browser, so `Origin` and `Sec-Fetch-Site` are present and the request is
+refused before the key is considered. A `Host` header allowlist (`127.0.0.1:5006`, `localhost:5006`)
+is applied as well, because it costs one comparison.
+
+Handles: the two gates that exist because of the surrounding app.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/machine-auth.ts` — `isLoopbackSocket(req)`, `isBrowserOrigin(req)`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/app.ts` — line 30 `app.use(cors())`, line 31 `app.set('trust proxy', …)` (both exist today; the machine plane mounts **before** neither and opts out of the first)
+
 - A missing or wrong key → **`401` with a constant body**, `{"ok":false,"error":{"code":"unauthorized"}}`,
   which never distinguishes missing from wrong. The _server_ keeps its silence; the _client_ does the
   explaining (R6).
@@ -590,8 +665,12 @@ Read routes are always available. Write routes require the write tier
 | `/machine/v1/budget/month/:month/category/:id`           | PATCH             | **write** | set an amount or carryover                                                             |
 | `/machine/v1/sync`                                       | POST              | **write** | sync now                                                                               |
 
-The route-by-route reference (arguments, response fields, per-route errors) lives with the server;
-this table is the contract the CLI is written against.
+The route-by-route reference — every argument, every optional filter, every response field and
+every per-route error — is **[apis.mdx](./apis.mdx)**, which is the authority on the wire. This
+table is the subset the CLI's own verbs are written against, and it is deliberately smaller: the
+plane has grown an analytics family, the envelope operations, account provisioning and undo, and
+`abx` picks up each of those as its verb catalogue (§6) grows. **Where this table and apis.mdx
+disagree, apis.mdx is right.**
 
 ### 5.3 Response envelope (LOCKED)
 
@@ -605,6 +684,15 @@ Every machine-plane response — success or failure — is one JSON object of th
 `hint` always names a remediation. The closed error vocabulary is
 `unauthorized` · `forbidden` · `not_found` · `invalid_input` · `conflict` · `write_disabled` ·
 `not_ready` · `upstream_error` · `internal`. A tenth code is a spec change, not a commit.
+
+**These nine are the machine plane's.** [mcp.mdx](./mcp.mdx) §12.3 lists twelve, and the three extra
+— `confirm_required`, `too_many_changes`, `wrong_server` — are **minted by the MCP itself and never
+appear on the wire**. Each names a condition the MCP detects before or instead of a call: a missing
+`confirm` echo, a ceiling the MCP enforces, and a foreign-shaped identifier the MCP redirects. The
+relationship is one-way and total: **every machine-plane code is also an MCP code**, so the MCP can
+pass a server error through unchanged, and the three MCP-only codes are never produced by a route.
+The CLI, which has no confirm-echo and no routing problem, uses the nine. A test asserts the MCP's
+vocabulary is a strict superset of this one.
 
 ### 5.4 The thin-client rule (LOCKED)
 
@@ -671,18 +759,19 @@ everything else on stderr (§13.1).
 
 ### 7.1 The universal flags
 
-| Flag                        | Meaning                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| `--format json\|table\|csv` | what stdout carries. **`json` is the default** (§13.2)                         |
-| `--write`                   | actually write. Without it, every write verb is a dry run that prints the plan |
-| `--yes`                     | confirm a write that would change more than `--max-changes` rows (default 200) |
-| `--api <url>`               | talk to a different install. Loopback or `https:` only (R3)                    |
-| `--timeout <ms>`            | per-call timeout. **Ignored by `statements apply`** (§7.4)                     |
-| `--no-bringup`              | never start the app; if it is down, fail with exit `2`                         |
-| `--quiet`                   | no spinner, no progress, no informational stderr. Errors still print           |
-| `--verbose`                 | informational stderr lines, plus the resolved target and key fingerprint       |
-| `--json-errors`             | errors on stderr as one JSON object per line, for scripts                      |
-| `--help` / `-h`             | usage                                                                          |
+| Flag                        | Meaning                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| `--format json\|table\|csv` | what stdout carries. **`json` is the default** (§13.2)                                   |
+| `--write`                   | actually write. Without it, every write verb is a dry run that prints the plan           |
+| `--yes`                     | confirm a write that would change more than `--max-changes` rows (default 200)           |
+| `--max-changes <n>`         | the write ceiling for this run. Default 200; exceeding it needs a second `--yes` (§10.8) |
+| `--api <url>`               | talk to a different install. Loopback or `https:` only (R3)                              |
+| `--timeout <ms>`            | per-call timeout. **Ignored by `statements apply`** (§7.4)                               |
+| `--no-bringup`              | never start the app; if it is down, fail with exit `2`                                   |
+| `--quiet`                   | no spinner, no progress, no informational stderr. Errors still print                     |
+| `--verbose`                 | informational stderr lines, plus the resolved target and key fingerprint                 |
+| `--json-errors`             | errors on stderr as one JSON object per line, for scripts                                |
+| `--help` / `-h`             | usage                                                                                    |
 
 ### 7.2 Target resolution — this machine is the default (LOCKED)
 
@@ -699,17 +788,51 @@ The resolved target is printed once on stderr under `--verbose`, and **always** 
 write, in the run summary. A run that reports success against the wrong install is not a crash — it
 is a thing discovered a week later by somebody looking for rows that are on another machine.
 
-### 7.3 R-rule: a new value-taking flag joins `takesValue` in the SAME edit
+### 7.3 The `takesValue` set is DERIVED, never hand-maintained (LOCKED)
 
-This is the one recurring bug in tools of this shape, and it is silent. An absent entry makes the
-flag a **boolean**, so `--start 2026-01-01` is read as `--start` true plus a stray positional, and
-the verb either drops the date or takes the date as its subject. The parser therefore **warns on
-stderr** when a `--flag` outside the set is followed by a non-`--` token, naming the file to edit.
-The warning is not the fix; it is the smoke alarm.
+An earlier draft of this spec carried a hand-written list of value-taking flags plus an R-rule saying
+_"a new value-taking flag joins the list in the same edit."_ That rule is the right diagnosis and the
+wrong cure, and the proof is that **the draft's own list was already wrong**: `--prefer` (§10.4),
+`--path` (§10.1) and `--lines` (§11.2) were specified as taking values and were missing from it,
+while `--out`, `--since` and `--reason` were in it and belong to no verb in §6.
 
-Value-taking flags today: `--format --api --timeout --max-changes --account --start --end --as-of
---month --category --amount --table --select --filter --limit --data --map --entity --bank --year
---out --since --reason`.
+That is the bug, committed in the document whose job was to prevent it — which is exactly how it
+behaves in code. An absent entry makes the flag a **boolean**, so `--prefer /path/to/jan.pdf` parses
+as `--prefer` true plus a stray positional, and `statements dupes` either ignores the operator's
+choice or takes the path as its subject. Nothing errors. The discipline fails silently and there is
+no moment at which anyone notices.
+
+**So the list stops existing.** Each verb declares its own flags, with arity, next to the verb:
+
+```ts
+// cli/code/src/commands/statements.ts
+export const dupes: Verb = {
+  name: 'statements dupes',
+  flags: {
+    prefer: { value: 'path', help: 'resolve a conflict in favour of this statement file' },
+    path: { value: 'path', help: 'the statements root (overrides ABX_STATEMENTS_DIR)' },
+  },
+  run: …,
+};
+```
+
+The parser builds `takesValue` by walking the resolved verb's `flags` plus the universal set in §7.1.
+A flag that takes a value **cannot** be registered without declaring it, because the declaration is
+the only place the flag exists at all. There is no second list, for the same reason `tools/list` and
+dispatch read one array in [mcp.mdx](./mcp.mdx) §9.3: two lists that must agree are two lists that
+will not.
+
+What survives from the R-rule is the diagnostics, which are still worth having:
+
+- An **unknown** flag is exit `2` with the verb's flag list and the nearest match by edit distance —
+  not a warning, because a misspelt flag is never what the operator meant.
+- A **boolean** flag followed by a non-`--` token that the verb has no positional slot for is exit
+  `2` naming both, because that is the shape a missed-arity bug takes from the outside.
+- `abx help <verb>` prints the verb's declared flags and their arities, generated from the same
+  object, so the help can never describe a flag the parser does not have.
+
+Tests: every flag named anywhere in §6 resolves to a declared flag on that verb; every declared flag
+appears in that verb's help output; no declared flag is unreachable from §6.
 
 ### 7.4 No client-side timeout on the long verbs (LOCKED)
 
@@ -891,13 +1014,43 @@ Each surviving row becomes one canonical record:
 | `date`                                        | `YYYY-MM-DD`   | the transaction date, not the posting date, when the statement gives both               |
 | `amount_cents`                                | signed integer | **integer cents, always.** Negative is money out. Never a float, anywhere, ever (§13.3) |
 | `payee`                                       | string         | the statement's description, with the bank's noise stripped by a per-bank normaliser    |
-| `notes`                                       | string         | the raw description, unmodified, so nothing is lost by normalisation                    |
+| `imported_payee`                              | string         | the raw description, unmodified, so nothing is lost by normalisation (§10.5a)           |
 | `imported_id`                                 | 32 hex         | §10.6                                                                                   |
 | `source_file` · `source_kind` · `source_line` | string         | provenance (§10.3)                                                                      |
 | `ordinal`                                     | integer        | §10.6 — the two-coffees field                                                           |
 
 The per-bank normaliser is a **table, not code per bank**: a list of `{bank, pattern, replacement}`
 rules with a test fixture each. A bank we have never seen gets the identity normaliser and works.
+
+### 10.5a The raw description goes in `imported_payee`, and `notes` is left alone (LOCKED)
+
+An earlier draft put the unmodified bank description in `notes`. That is the wrong field, and it
+costs the operator something real.
+
+`ImportTransactionEntity` already has a field for exactly this, documented upstream as _"the raw
+description when importing, allowing the user to see the original value."_ It is `imported_payee`,
+the app renders it beside the normalised payee, and the rules engine can match on it. Our canonical
+row maps straight onto the app's own vocabulary:
+
+| Our field        | Actual's field   | Holds                                                   |
+| ---------------- | ---------------- | ------------------------------------------------------- |
+| `payee`          | `payee_name`     | the normalised payee — a payee is created or matched    |
+| `imported_payee` | `imported_payee` | the bank's raw description, byte for byte               |
+| —                | `notes`          | **the operator's.** We never write it                   |
+| `amount_cents`   | `amount`         | integer cents (§13.3) — the same convention, same units |
+| `imported_id`    | `imported_id`    | §10.6                                                   |
+
+**`notes` is the operator's field, and writing it is destructive.** It is where a human types _"split
+with Sam, reimbursed"_. Putting a bank string there on first import fills every note in the budget
+with machine text, and — worse — a re-import that updates an existing row would **overwrite a note
+the operator wrote**, which is the one thing in this pipeline that could destroy data the operator
+authored rather than data a bank sent. The pipeline is additive (§10.9); leaving `notes` unset is how
+that promise is kept at the field level.
+
+Nothing is lost: the raw description is on the row, in the field built for it, and the staging CSV
+keeps its own `notes` column for the raw text as well, so `_rows.csv` is still self-describing.
+
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/types/models/import-transaction.ts` — `ImportTransactionEntity` (exists today; `imported_payee`, `payee_name`, `imported_id`, `amount`)
 
 ### 10.6 Stage 5 — de-duplication, layer two: the TRANSACTION level (LOCKED)
 
@@ -936,19 +1089,63 @@ Four properties follow, and each one is a failure we are choosing not to have:
 
 Everything in the hash except `ordinal` is identical for those two rows. `ordinal` is **the
 zero-based index of this row among rows with an identical (date, amount, payee) tuple within the
-same account-month**, assigned in statement order.
+same account-month** — the _tie-group index_.
 
 - Two coffees → ordinals `0` and `1` → two different ids → two transactions. Correct.
-- The same month scanned twice → both scans see coffee-0 and coffee-1 in the same order → identical
-  ids → they collapse. Correct.
+- The same month scanned twice → both scans see coffee-0 and coffee-1 → identical ids → they
+  collapse. Correct.
 - A statement that lists the same day's transactions in a different order than another statement of
-  the same month → the ordinals could swap between the two rows, but the **set** of ids is identical,
-  so the set still collapses correctly. The only visible effect is which source file a given row
-  claims, which is recorded and harmless.
+  the same month → the ordinals could swap between the two rows, but every member of a tie-group is
+  by definition identical in all four hashed fields, so the **set** of ids is identical and the set
+  still collapses correctly. The only visible effect is which source file a given row claims, which
+  is recorded and harmless.
 
 The alternative — including a running balance or a line number in the hash — was rejected: a line
 number changes when the extractor changes, and a running balance is absent from a third of the
 statements we hold.
+
+#### The scope of the counter is the ACCOUNT-MONTH, not the statement (LOCKED)
+
+An earlier draft said ordinals were "assigned in statement order," which reads as _per statement_.
+That is a data-loss bug, and it is not hypothetical — it fires whenever **one account-month is
+covered by more than one statement**, which is the normal case for two banks we already hold:
+
+- **Statement periods that do not align to calendar months.** A cycle running 15 Sep – 14 Oct puts
+  rows into two calendar months, so calendar month October is fed by the Sep–Oct statement _and_ the
+  Oct–Nov one.
+- **A month re-issued in parts**, or a corrected partial statement covering half a period.
+
+Take calendar October with two genuine `$5.00 BLUE BOTTLE` charges on the 3rd — one landing in the
+Sep–Oct statement, one in the Oct–Nov statement. Counting per statement gives each of them
+`ordinal = 0`, so both hash to the same `imported_id`, and layer two **silently collapses two real
+transactions into one**. The operator is $5 richer on paper, the month does not reconcile, and
+nothing anywhere reports a problem — it looks exactly like correct de-duplication.
+
+So the rule is stated with its scope, and the ordering made explicit enough to be deterministic:
+
+1. **Merge first, count second.** All `primary` statements contributing rows to one
+   `(account_key, YYYY-MM)` are concatenated into a single row set **before** any ordinal is
+   assigned. Superseded and `duplicate_identical` statements contribute nothing (§10.4); a
+   `conflict` blocks the account-month outright, so it never reaches this stage.
+2. **The concatenation order is deterministic**, so two machines produce the same result: statements
+   sort by `period_end`, then by `sha256`; rows within a statement keep their extraction order
+   (`source_line` ascending).
+3. **Ordinals are then assigned per tie-group** — group the merged rows by
+   `(date, amount_cents, payee_norm)` and number each group `0, 1, 2 …` in the merged order.
+
+Because the two coffees now live in one merged set, they are one tie-group of size two, get ordinals
+`0` and `1`, and both survive. And because the _same_ merge happens on every run, a re-run reproduces
+both ids exactly — the property §10.6 point 2 depends on.
+
+**The `ordinal` is recorded in the staging CSV and in `_dupes.csv`, with its tie-group size.** An
+ordinal is the one field in the hash a human cannot re-derive by looking at a statement, so when a
+row is questioned six months from now, the number and the size of the group it was drawn from have
+to be on disk or the id is unexplainable.
+
+**Fixture, required.** The golden tree (§18) carries an account whose September and October
+statements are cycle-dated 15th-to-14th and which has two identical same-day amounts in the overlap
+month. A test asserts both rows survive with distinct ids. Without that fixture this bug passes every
+other test in the suite, because every other fixture gives each month exactly one statement.
 
 ### 10.6b Actual's importer is the authority, not us (LOCKED)
 
@@ -960,6 +1157,62 @@ matching against transactions that already exist.
 _the import set_; Actual de-duplicates _against the ledger_. This is the same rule as §5.4, applied
 where it matters most: if our notion of "already there" ever diverged from the app's, the CLI would
 create phantom rows the UI insists are not duplicates, and reconciling that by hand is a weekend.
+
+### 10.6c The importer options are PINNED, because two of the defaults are wrong for us (LOCKED)
+
+"Hand the rows to `importTransactions`" is not a complete instruction. That function takes options,
+and `reconcileTransactions` behind it takes more, and **the defaults are tuned for an interactive
+bank-sync of a live account, which is not what this pipeline is.** Two of them would quietly break a
+property this spec claims elsewhere. Every call therefore passes them explicitly, with no reliance on
+a default:
+
+| Option              | We pass     | The default | Why we pin it                                                                              |
+| ------------------- | ----------- | ----------- | ------------------------------------------------------------------------------------------ |
+| `strictIdChecking`  | `true`      | `true`      | Agrees with the default — pinned so a future upstream change cannot move it silently       |
+| `reimportDeleted`   | **`false`** | **`true`**  | **The default re-adds transactions the operator deleted.** See below — this is the big one |
+| `isPreview`         | per call    | `false`     | `true` for `plan`, `false` for `apply` (§10.8)                                             |
+| `defaultCleared`    | `true`      | `true`      | A row on a posted statement has cleared by definition                                      |
+| `isBankSyncAccount` | `false`     | `false`     | We are not a bank-sync source; this path normalises payees differently                     |
+| `updateDates`       | `false`     | `false`     | A fuzzy match must never rewrite the date we extracted from a statement                    |
+
+**`reimportDeleted` — the default fights the operator, monthly, forever.**
+
+`matchTransactions` resolves it from a per-account preference that **defaults to `true`**, and the
+flag chooses which view an `imported_id` lookup runs against:
+
+- `reimportDeleted: true` (the default) → the lookup runs against `v_transactions`, which filters
+  `tombstone = 0`. A deleted transaction is **not found**, so there is no match, so the row is
+  **added again**.
+- `reimportDeleted: false` → the lookup runs against `v_transactions_internal`, which includes
+  tombstones. The deleted row **is** found, counts as a match, and nothing is re-added.
+
+Now put that against UC-9, the monthly cron. The operator sees a mis-extracted row in the UI — an OCR
+misread, a duplicate the bank itself issued — and deletes it, which is the only tool the UI gives
+them. Next month the cron runs, the row is not in `v_transactions`, and **it comes back.** They
+delete it again. It comes back again. The pipeline is behaving exactly as documented and is
+indistinguishable, from the operator's chair, from a tool that ignores them.
+
+It also falsifies AC-7 in the one case anybody would actually hit: "the second `apply` reports
+`added: 0`" is true only while nothing has been deleted in between.
+
+So `reimportDeleted: false` is the pinned value, and **a deletion in the UI is a decision the
+pipeline respects.** The operator who genuinely wants a deleted row back re-imports it deliberately
+with `abx statements apply --reimport-deleted`, which passes `true` for that run only, names every
+row it would resurrect, and requires `--yes` — because resurrecting rows somebody deleted on purpose
+is exactly the kind of act that should be typed rather than inherited from a default.
+
+**`strictIdChecking`, and why agreeing with the default is still worth writing down.** With it on,
+a row carrying an `imported_id` fuzzy-matches only against ledger transactions that have **no**
+import id. That is precisely right here: a hand-entered transaction the operator typed in March can
+be reconciled against the statement row that turns up later, while two rows that both came from
+statements can never be fuzzy-matched into each other — they match on `imported_id` or not at all.
+Turning it off would let two distinct coffees collapse in the ledger after surviving §10.6a, which
+would be a long way to travel to lose the same $5.
+
+Handles: the pinned importer options.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/apply.ts` — `IMPORTER_OPTIONS`, `applyPlan()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/accounts/sync.ts` — `reconcileTransactions()`, `matchTransactions()` (exists today; `reimportDeleted` resolves from the `sync-reimport-deleted-{acctId}` preference, defaulting to `'true'`)
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/migrations/1608652596044_trans_views.sql` — `v_transactions` (the `tombstone = 0` filter that makes the two views differ)
 
 Handles: minting ids, the two de-dupe layers, and handing off to the importer.
 Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/identity.ts` — `mintImportedId()`, `assignOrdinals()`
@@ -1013,6 +1266,24 @@ accounts:
   - match: { entity: act3, bank: Chase, account_last4: '8155' }
     actual_account_name: 'ACT3 Savings'
 ```
+
+**The plan is Actual's own preview, not our prediction of it (LOCKED).** `importTransactions` takes
+`opts.dryRun`, which becomes `isPreview: true` on `reconcileTransactions`: it runs the entire real
+reconciliation — `imported_id` lookup, the rules engine, fuzzy date/amount matching, split handling —
+and returns `{ added, updated, updatedPreview }` **without writing anything**. `updatedPreview`
+carries, per row, the existing transaction it matched and whether it was ignored.
+
+`plan` calls exactly that. It does **not** compute "already present" by querying the ledger for our
+`imported_id`s and subtracting, which is the obvious implementation and is wrong for the reason §5.4
+gives: it would be a second reconciliation engine, it would disagree with the first one at the
+edges — fuzzy matches, reconciled-and-locked rows, split parents — and the disagreement would surface
+as a plan that says 117 new and an apply that adds 131.
+
+Doing it this way collapses the gap §10.6b is worried about to zero: **`plan` and `apply` are the
+same call with one boolean different.** "What Actual would call a duplicate" stops being a phrase in
+a spec and becomes the literal return value of the authority, and the counts below are read straight
+out of it — `added.length`, `updated.length`, and `updatedPreview` partitioned by `ignored` and by
+whether the match carried an `imported_id`.
 
 The plan prints, per account:
 
@@ -1248,16 +1519,20 @@ titles, the PR template left blank, no GitHub issues created by an agent. See
 
 ## 18. Testing
 
-| Layer                    | What it holds                                                                                                                                                                                                                                                                                                                       |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Unit (vitest)**        | the argument parser including the `takesValue` warning; the cents/decimal renderer in both directions; `mintImportedId()` against a frozen fixture vector; `assignOrdinals()` on the two-coffees case; the statement ranking rules, each with its own case; the credentials merge (existing unrelated keys survive)                 |
-| **Golden fixtures**      | a synthetic statements tree under `cli/code/test/fixtures/statements/` — three entities, two banks, a duplicated month with identical bytes, a duplicated month with different bytes, a conflict pair, an unreadable PDF, and a month containing two identical same-day amounts. Every de-dupe rule has a fixture that exercises it |
-| **Determinism test**     | run the whole pipeline twice over the fixture tree; `_rows.csv` must be **byte-identical**, and the second `apply` must report `added: 0`                                                                                                                                                                                           |
-| **Integration**          | a real sync server on an ephemeral port with a temp state dir and a temp credentials file; the full loopback + key + mode + input gate ladder, including the `404`-off-loopback assertion                                                                                                                                           |
-| **Auth negatives**       | no key → 401 constant body; wrong key → the same body, byte for byte; loose file mode → refusal; non-loopback → 404                                                                                                                                                                                                                 |
-| **stdout purity canary** | greps the **built** `cli/code/dist/` for `console.log(` and `process.stdout.write(` outside the single sanctioned renderer module — grepping the output, not the source, because it catches a violation bundled in from a dependency                                                                                                |
-| **Open-source canaries** | the three §17 greps                                                                                                                                                                                                                                                                                                                 |
-| **Smoke**                | `abx`, `abx doctor`, `abx --help` each exit as specified with the server both up and down                                                                                                                                                                                                                                           |
+| Layer                      | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Unit (vitest)**          | the argument parser including the `takesValue` warning; the cents/decimal renderer in both directions; `mintImportedId()` against a frozen fixture vector; `assignOrdinals()` on the two-coffees case; the statement ranking rules, each with its own case; the credentials merge (existing unrelated keys survive)                                                                                                                                               |
+| **Golden fixtures**        | a synthetic statements tree under `cli/code/test/fixtures/statements/` — three entities, two banks, a duplicated month with identical bytes, a duplicated month with different bytes, a conflict pair, an unreadable PDF, a month containing two identical same-day amounts, and **a cycle-dated account whose statements run the 15th to the 14th**, so one calendar month is fed by two statements (§10.6a). Every de-dupe rule has a fixture that exercises it |
+| **The ordinal-scope test** | the cycle-dated fixture's two identical same-day amounts, arriving from **two different statements** in one calendar month, produce two distinct `imported_id`s and both import. This is the test that fails if ordinals are ever counted per statement (§10.6a)                                                                                                                                                                                                  |
+| **Importer-option tests**  | `reimportDeleted: false` — import, delete a row through the app, re-run, assert it is **not** back, then assert `--reimport-deleted` brings it back and names it. `strictIdChecking: true` — two statement rows one day and one cent apart never match each other (§10.6c)                                                                                                                                                                                        |
+| **`notes` is untouched**   | write a note on an imported transaction through the app, re-run the pipeline so the row is updated, assert the note survives byte for byte (§10.5a)                                                                                                                                                                                                                                                                                                               |
+| **plan ≡ apply**           | `plan` and `apply` over an unchanged budget report identical counts, because they are one `importTransactions` call differing in `dryRun` (§10.8)                                                                                                                                                                                                                                                                                                                 |
+| **Determinism test**       | run the whole pipeline twice over the fixture tree; `_rows.csv` must be **byte-identical**, and the second `apply` must report `added: 0`                                                                                                                                                                                                                                                                                                                         |
+| **Integration**            | a real sync server on an ephemeral port with a temp state dir and a temp credentials file; the full loopback + origin + key + mode + input gate ladder, including the `404`-off-loopback assertion                                                                                                                                                                                                                                                                |
+| **Auth negatives**         | no key → 401 constant body; wrong key → the same body, byte for byte; loose file mode → refusal; non-loopback → 404; **non-loopback socket carrying `X-Forwarded-For: 127.0.0.1` with `trust proxy` on → 404**; **valid key plus `Origin: https://evil.example` → 404**; `Sec-Fetch-Site: cross-site` → 404 (§4.4a)                                                                                                                                               |
+| **stdout purity canary**   | greps the **built** `cli/code/dist/` for `console.log(` and `process.stdout.write(` outside the single sanctioned renderer module — grepping the output, not the source, because it catches a violation bundled in from a dependency                                                                                                                                                                                                                              |
+| **Open-source canaries**   | the three §17 greps                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Smoke**                  | `abx`, `abx doctor`, `abx --help` each exit as specified with the server both up and down                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
 
@@ -1335,6 +1610,22 @@ engine is ([mcp.mdx](./mcp.mdx) §2).
     newer than every source file under `cli/code/src/`.
 14. `abx` never appears in `packages/`; `packages/cli` is unmodified by any change made under this
     spec.
+15. A machine-plane request arriving on a **non-loopback socket** but carrying
+    `X-Forwarded-For: 127.0.0.1` returns `404`, with `trust proxy` configured on the app.
+16. A machine-plane request carrying `Origin: https://evil.example`, or
+    `Sec-Fetch-Site: cross-site`, returns `404` **even with a valid key** (§4.4a).
+17. The fixture tree's cycle-dated account — statements running the 15th to the 14th, with two
+    identical same-day amounts falling in the same calendar month from **two different statements** —
+    imports both rows, with distinct `imported_id`s, and re-imports neither on the second run
+    (§10.6a).
+18. Deleting an imported transaction in the UI and re-running the full pipeline does **not** re-add
+    it; `abx statements apply --reimport-deleted --yes` does, and names each row first (§10.6c).
+19. `abx statements plan` and `abx statements apply` produce identical counts for an unchanged
+    budget, because `plan` is the same `importTransactions` call with `dryRun: true` (§10.8).
+20. No verb writes Actual's `notes` field. Asserted by inspecting every row the pipeline submits
+    (§10.5a).
+21. Every flag named in §6 resolves to a flag declared on that verb, and every declared flag appears
+    in `abx help <verb>` — both directions, no hand-maintained list (§7.3).
 
 ---
 
@@ -1367,13 +1658,22 @@ P1–P3 are the ones that must be right; everything after them is a verb on a wo
    into `~/.credentials/actual_budget.json` at `0600`, sent as `X-Actual-Machine-Key`, compared in
    constant time, and **never logged, echoed, or sent off loopback**.
 6. The machine plane 404s off loopback and 401s with a constant body on a bad key; with no key
-   configured server-side it is not mounted at all.
+   configured server-side it is not mounted at all. The loopback test reads
+   **`req.socket.remoteAddress` only** — never `req.ip`, which `trust proxy` makes forgeable — and a
+   request carrying a browser `Origin` or `Sec-Fetch-Site` is refused, because the app's global
+   `cors()` means "loopback" includes any web page the operator has open (§4.4a).
 7. The CLI computes no budget answer. One engine powers browser, CLI and MCP.
 8. Money is integer cents in every variable and every field; decimals exist only in the renderer.
 9. De-duplication has two layers — statements by `(entity, bank, account, period)` with
    deterministic ranking, rows by a deterministic `imported_id` that includes an `ordinal` so two
    identical same-day transactions survive — and **Actual's `importTransactions` remains the sole
-   authority on what already exists in the ledger**.
+   authority on what already exists in the ledger**. Ordinals are counted over the **merged**
+   account-month, never per statement (§10.6a), and `plan` is that same importer run with
+   `dryRun: true` (§10.8).
+   9a. The importer options are pinned, not defaulted: `reimportDeleted: false`, so a transaction the
+   operator deleted in the UI stays deleted; `strictIdChecking: true`, so two statement rows can
+   never fuzzy-match into each other (§10.6c). The raw bank description goes in `imported_payee`;
+   Actual's `notes` field belongs to the operator and the pipeline never writes it (§10.5a).
 10. Nothing outside `{ROOT}/import/` is ever written under the statements root, and the staging
     directory is rebuildable from source at any time.
 11. stdout carries exactly one payload; the spinner, progress and every diagnostic go to stderr, and
@@ -1386,6 +1686,8 @@ P1–P3 are the ones that must be right; everything after them is a verb on a wo
 
 ## 23. Related specs
 
+- **[apis.mdx](./apis.mdx) — the machine-plane API this CLI is a client of.** The authority on
+  every route, argument and error code. A verb here is one route there.
 - [mcp.mdx](./mcp.mdx) — the MCP server. Same key, same machine plane, same engine; a different
   caller with a different threat model.
 - [../AGENTS.md](../AGENTS.md) — the monorepo's own rules: yarn from the root, typecheck before
