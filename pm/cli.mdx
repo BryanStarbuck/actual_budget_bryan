@@ -1,0 +1,1398 @@
+---
+title: Actual Budget — the operator CLI (`abx`)
+description: >
+  The terminal front door to THIS install of Actual Budget. `abx` is a deliberately THIN client —
+  it owns argument parsing, output formatting and getting the app up, and it owns no budget logic
+  at all: every balance, every query, every reconciliation is computed by the running app behind a
+  localhost-only MACHINE PLANE and returned over HTTP. Authentication is a 256-bit machine key the
+  app generates with a CSPRNG into ~/.credentials/actual_budget.json at mode 0600; the CLI reads it
+  from the same filesystem, sends it as X-Actual-Machine-Key, and the server compares it in constant
+  time before any handler runs. A process on another computer that reaches the port has no way to
+  hold that file, so the shared-filesystem trick IS the authentication — and it is loopback-only by
+  construction. If the app is not running when `abx` is invoked, the CLI brings it up itself (the
+  same work the root justfile does) and gates on the health endpoint before issuing its call. The
+  flagship command family is the STATEMENTS PIPELINE (§10) — walk a tree of bank-statement PDFs,
+  extract, de-duplicate at BOTH the statement level (the same month scanned twice) and the
+  transaction level (a deterministic imported_id that survives re-runs without collapsing two
+  genuine $5.00 coffees on the same day), stage canonical CSVs, and hand them to Actual's own
+  importer, which stays the sole authority on what is a duplicate. `abx` is NOT `@actual-app/cli`
+  (§1) — that binary is `actual`, it is upstream, it is published to npm, and it talks to a sync
+  server with a password. `abx` is ours, it lives outside `packages/` so it never conflicts with an
+  upstream merge, and it talks to this machine.
+---
+
+# Actual Budget — the operator CLI (`abx`)
+
+`~/BGit/Bryan_git/actual_budget_bryan/cli/` · binary **`abx`** · Node + TypeScript
+
+---
+
+## Table of Contents
+
+- [Introduction](#introduction)
+  - [Why this repo exists](#why-this-repo-exists)
+  - [Where this spec fits under that umbrella](#where-this-spec-fits-under-that-umbrella)
+  - [What the operator gets from it](#what-the-operator-gets-from-it)
+  - [How it works — the idea](#how-it-works--the-idea)
+  - [How it works — the machinery](#how-it-works--the-machinery)
+  - [What this spec covers](#what-this-spec-covers)
+- [Goal](#goal)
+- [Overview](#overview)
+- [1. There are TWO CLIs in this repo, and confusing them is the commonest mistake here](#1-there-are-two-clis-in-this-repo-and-confusing-them-is-the-commonest-mistake-here)
+- [2. Placement, layout, and build integration](#2-placement-layout-and-build-integration)
+- [3. Bring-up — the CLI's justfile-equivalent duty](#3-bring-up--the-clis-justfile-equivalent-duty)
+- [4. Authentication — the local machine key](#4-authentication--the-local-machine-key)
+- [5. The machine plane — the HTTP surface `abx` speaks](#5-the-machine-plane--the-http-surface-abx-speaks)
+- [6. The verb catalogue](#6-the-verb-catalogue)
+- [7. The argument contract](#7-the-argument-contract)
+- [8. The zero-argument default — bare `abx`](#8-the-zero-argument-default--bare-abx)
+- [9. The read verbs](#9-the-read-verbs)
+- [10. The statements pipeline — `abx statements`](#10-the-statements-pipeline--abx-statements)
+- [11. The operational verbs](#11-the-operational-verbs)
+- [12. Progress UI — the CLI must never look hung](#12-progress-ui--the-cli-must-never-look-hung)
+- [13. Output contracts](#13-output-contracts)
+- [14. Exit codes](#14-exit-codes)
+- [15. Logging, and what a failure leaves behind](#15-logging-and-what-a-failure-leaves-behind)
+- [16. Security](#16-security)
+- [17. Open-source safety](#17-open-source-safety)
+- [18. Testing](#18-testing)
+- [19. Use cases](#19-use-cases)
+- [20. Acceptance criteria](#20-acceptance-criteria)
+- [21. Build phases](#21-build-phases)
+- [22. Invariants recap](#22-invariants-recap)
+- [23. Related specs](#23-related-specs)
+
+---
+
+## Introduction
+
+### Why this repo exists
+
+Actual Budget is a local-first personal finance tool: the budget file lives on the operator's own
+disk, the maths runs on the operator's own machine, and a sync server exists only to carry
+encrypted deltas between that operator's devices. Nobody else holds the ledger. That is the whole
+proposition, and it is the reason this repo is a working copy rather than a subscription.
+
+This repo — `~/BGit/Bryan_git/actual_budget_bryan/` — is a working copy of `actualbudget/actual`
+that we build on and intend to keep open source. Two consequences run through every decision below.
+**One:** nothing private ever lands in this directory tree; the operator's statements, balances and
+secrets live elsewhere on the disk and reach the code only through configuration (§17).
+**Two:** the repo tracks an upstream that moves every week, so anything we add is added where an
+upstream merge will never touch it (§1.4).
+
+### Where this spec fits under that umbrella
+
+The product has three front doors. The **browser** at `http://localhost:3001/` is the one a human
+uses. The **MCP server** ([mcp.mdx](./mcp.mdx)) is the one Claude Code uses. This spec is the
+third: the **terminal**, for the operator who is already in a shell, already standing in a
+directory full of bank statements, and does not want to open a browser to answer _"which months am
+I missing?"_ or _"did that import double anything?"_
+
+All three front doors answer from the same engine. That is not an aspiration, it is the design rule
+in §5.4, and it is what makes it impossible for the CLI and the UI to disagree about a balance.
+
+### What the operator gets from it
+
+- The questions a browser answers, answered in a pipe: balances, transactions, budget months,
+  ActualQL queries — as JSON for a script, a table for a human, or CSV for a spreadsheet.
+- The job a browser is bad at: taking **years of bank-statement PDFs**, spread across entities,
+  banks, accounts, years and months, and turning them into a clean, de-duplicated import — where
+  "de-duplicated" means the same month scanned twice does not produce two copies of January, and a
+  re-run next week does not produce a second copy of everything (§10).
+- An install that starts itself. `abx` never says _"start the server first."_ If the app is down, it
+  brings it up and then answers the question (§3).
+- A credential story with nothing to type. No password prompt, no token to paste, no secret in a
+  config file inside a repo that is going public (§4).
+
+### How it works — the idea
+
+The web app already knows everything. Rather than teach a second program to read budget files, we
+give the running app a small, **loopback-only machine plane** — a handful of HTTP routes meant for
+programs rather than browsers — and make the CLI a caller of it.
+
+Authentication falls out of the filesystem. The app generates a 256-bit random key into a file in
+the operator's home directory that only the operator can read. Any program running as that operator
+can read it; nothing running anywhere else can. So the CLI proves it belongs on this machine by
+producing a secret that only this machine's filesystem holds. There is nothing to log in to,
+because being on the machine _is_ the login — and the machine plane refuses to answer anything that
+did not arrive on the loopback interface, so an attacker who reaches the port from the network is
+turned away before the key is even considered.
+
+### How it works — the machinery
+
+1. `abx` parses arguments and resolves a target (§7.2). The default target is **this machine**.
+2. It reads the machine key from `~/.credentials/actual_budget.json`, generating it with
+   `crypto.randomBytes(32)` if no process has yet (§4.3).
+3. It probes `GET http://127.0.0.1:5006/health`. If that fails, it performs the root justfile's
+   `setup` + `server` work itself and waits for health, showing a spinner the whole time (§3, §12).
+4. It issues one HTTP call to the machine plane at `/machine/v1/*` with
+   `X-Actual-Machine-Key: <64 hex>` (§5.2).
+5. The sync server checks the loopback gate, then the key in constant time, then the mode gate,
+   then the input schema — and only then reaches the budget through `@actual-app/api`, the same
+   engine the browser drives (§5.1).
+6. `abx` renders the answer to stdout and everything else to stderr (§13).
+
+For the statements pipeline the same shape holds, with the heavy work — extraction, statement
+de-duplication, row normalisation, `imported_id` minting, the reconciliation preview — done on the
+server and the CLI printing the plan (§10).
+
+### What this spec covers
+
+Every verb, every flag, the exit-code contract, the key lifecycle, the bring-up contract, the
+statements pipeline end to end including both de-duplication layers, what the CLI prints on stdout
+versus stderr, what it logs, what it refuses, and the acceptance criteria that say it is done.
+
+It does **not** cover the MCP server ([mcp.mdx](./mcp.mdx)), the machine plane's own route-by-route
+reference (which belongs with the server), or `@actual-app/cli` — the upstream CLI, which is
+somebody else's spec and is discussed here only to keep the two apart (§1).
+
+---
+
+## Goal
+
+**One command, from any directory, that answers a question about this install truthfully, or takes
+a directory of bank-statement PDFs and lands them in the budget exactly once.**
+
+Three properties make that goal real rather than decorative:
+
+- **Truthfully** — the CLI computes nothing. A number `abx` prints was computed by the same code
+  that computed it for the browser, so the two can never disagree (§5.4).
+- **Exactly once** — de-duplication is defined at two levels, is deterministic, and survives
+  re-runs, re-scans, and the same month arriving in three different PDFs (§10.6).
+- **From any directory** — the tool is on `PATH`, it starts the app if the app is down, and it needs
+  no environment set up by hand (§2.4, §3, §4).
+
+---
+
+## Overview
+
+|                        |                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Binary**             | `abx`                                                                                                             |
+| **Lives in**           | `~/BGit/Bryan_git/actual_budget_bryan/cli/` (entry at the top, implementation under `cli/code/`)                  |
+| **Stack**              | TypeScript on Node ≥ 22, ESM. Same Node the repo requires                                                         |
+| **Talks to**           | `http://127.0.0.1:5006/machine/v1/*` — the machine plane on the sync server                                       |
+| **Authenticates with** | `X-Actual-Machine-Key`, 64 hex chars, from `~/.credentials/actual_budget.json` (0600)                             |
+| **State / logs**       | `~/T/_actual_budget/` — the same state root the root `justfile` already uses                                      |
+| **Never**              | computes a balance, reimplements an importer, writes a source PDF, or sends the machine key anywhere but loopback |
+| **Is not**             | `@actual-app/cli` (binary `actual`, upstream, npm, sync-server password) — see §1                                 |
+
+---
+
+## 1. There are TWO CLIs in this repo, and confusing them is the commonest mistake here
+
+This section is first because the mistake is first. `packages/cli` already exists. It is
+**`@actual-app/cli`**, it ships binaries named `actual` and `actual-cli`, it is MIT and published to
+npm, and it is complete: accounts, budgets, categories, category-groups, transactions, payees, tags,
+rules, schedules, query, server, sync. It is good. It is not ours.
+
+**We do not fork it, wrap it, rename it, or grow `abx` into a second copy of it.** Anything `abx`
+learns that belongs to every Actual user belongs in `packages/cli` as an upstream contribution
+(`[AI]`-prefixed, per [.github/agents/pr-and-commit-rules.md](../.github/agents/pr-and-commit-rules.md)).
+
+### 1.1 The naming table
+
+| Layer                            | `@actual-app/cli` — upstream                                  | **`abx` — this spec**                                 |
+| -------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
+| Binary                           | `actual`, `actual-cli`                                        | **`abx`**                                             |
+| Package                          | `@actual-app/cli`, published to npm                           | **`abx-cli`, never published**                        |
+| Location                         | `packages/cli/` (inside the yarn workspace glob)              | **`cli/` (top level, outside it — §1.4)**             |
+| Reaches                          | a **sync server**, possibly remote, over its public API       | **this machine's machine plane on loopback**          |
+| Authenticates with               | `ACTUAL_PASSWORD` / `ACTUAL_SESSION_TOKEN`, human credentials | **a generated machine key, no human credential**      |
+| Holds                            | its own downloaded budget cache in `~/.actual-cli/data`       | **nothing. It is stateless between runs**             |
+| Owns budget logic?               | yes — it drives `@actual-app/api` in-process                  | **no. Not one line (§5.4)**                           |
+| Starts the app?                  | no                                                            | **yes, if it is down (§3)**                           |
+| Knows about bank-statement PDFs? | no                                                            | **that is its flagship job (§10)**                    |
+| Config                           | cosmiconfig: `.actualrc`, `actual.config.json`, …             | **`~/.credentials/actual_budget.json` + `ABX_*` env** |
+| Logs to                          | stderr                                                        | **`~/T/_actual_budget/cli.info` and `cli.err`**       |
+| Env prefix                       | `ACTUAL_`                                                     | **`ABX_`**                                            |
+
+### 1.2 The one-line routing test
+
+> **Is the question about a budget on SOME server, reachable by anyone with the password? Use
+> `actual`. Is the question about THIS machine — this install, this disk, these PDFs? Use `abx`.**
+
+"List my accounts on the server at `budget.example.com`" → `actual`.
+"Is the local app even running, and why did last night's statement import add nothing?" → `abx`.
+
+### 1.3 What `abx` must never do
+
+- Never re-implement a verb `actual` already has, unless the machine-plane answer is genuinely
+  different (a _local_ fact, like which statement files exist). Duplication here is how the two
+  drift into disagreeing.
+- Never read or write `~/.actual-cli/data`. That directory belongs to `actual`; a second writer
+  corrupts a budget cache and the symptom surfaces days later as phantom transactions.
+- Never accept `ACTUAL_PASSWORD`, `ACTUAL_SESSION_TOKEN` or `ACTUAL_ENCRYPTION_PASSWORD`. Reading a
+  human credential is the upstream CLI's job and its risk profile, and a second reader of a password
+  is a second place it can leak. If one of those variables is set in the environment, `abx` ignores
+  it silently — it is not an error, it is simply not ours.
+- Never publish to npm. `"private": true` in `cli/package.json`, asserted by a test (§18).
+
+### 1.4 Why `abx` lives OUTSIDE `packages/` (LOCKED)
+
+The root `package.json` declares `"workspaces": { "packages": ["packages/*"] }`. Anything we add
+under `packages/` is a directory upstream does not have, inside a glob upstream owns, in a lockfile
+upstream regenerates. Every upstream merge then has a chance to touch it.
+
+`cli/`, `mcp/` and `pm/` sit at the repo top level, outside that glob. They are **ours**, they have
+their own `package.json` and their own lockfile-free dependency story, and an upstream merge cannot
+conflict with a directory upstream has never heard of. This is the same reason `pm/` is where the
+specs live rather than `packages/docs/`.
+
+The cost is that `yarn workspace` does not reach them, so the root `justfile` builds them explicitly
+(§2.3). That is a cost worth paying once, in one recipe, forever.
+
+---
+
+## 2. Placement, layout, and build integration
+
+### 2.1 Directory layout (LOCKED)
+
+```
+actual_budget_bryan/
+├── cli/                     # THE CLI — ours, outside the workspace glob
+│   ├── abx                  # POSIX shim — the callable
+│   ├── abx.cmd              # Windows shim
+│   ├── abx.mjs              # self-building entry: compiles cli/code/ when dist/ is stale, then runs
+│   ├── package.json         # "private": true
+│   ├── justfile             # build | run | test, for working on the CLI alone
+│   └── code/                # ALL implementation lives under here
+│       ├── src/
+│       │   ├── main.ts          # dispatch
+│       │   ├── args.ts          # the argument contract (§7)
+│       │   ├── credentials.ts   # the machine key (§4)
+│       │   ├── client.ts        # the one HTTP client (§5)
+│       │   ├── bringup.ts       # justfile-equivalent bring-up (§3)
+│       │   ├── progress.ts      # the spinner (§12)
+│       │   ├── render.ts        # json | table | csv (§13)
+│       │   ├── logger.ts        # cli.info / cli.err (§15)
+│       │   └── commands/        # one file per verb family
+│       └── dist/                # build output, git-ignored
+├── mcp/                     # the MCP server — see mcp.mdx
+├── pm/                      # product management. NO CODE, EVER
+│   ├── cli.mdx              # this file
+│   └── mcp.mdx
+└── packages/                # upstream's monorepo. Contribute here, never fork here
+```
+
+**The charter, stated once.** `cli/code/` may hold **CLI wrapper code only** — argument handling,
+HTTP calls, rendering, process bring-up, credential reading. Anything that computes an _answer about
+money_ is forbidden there and belongs behind the machine plane. If a CLI feature seems to need new
+computation, the computation becomes a machine-plane route first, and the CLI calls it. `pm/` holds
+no code at all, including no CLI code.
+
+### 2.2 Language and stack
+
+TypeScript on Node ≥ 22 (`package.json` `engines`), ESM, built with the same toolchain the repo
+already has. Dependencies are kept to what the job needs — an argument parser, a table renderer, and
+nothing that reaches the network on import. It may import **types** from `@actual-app/api` so the
+shapes it renders are the shapes the server sends; it must never import an `@actual-app/*`
+_implementation_ module. The boundary is HTTP, exactly as the sister apps draw it.
+
+### 2.3 Build integration with the root justfile (LOCKED)
+
+- **`just build` builds the CLI too.** The CLI must never be stale relative to the app. The root
+  `build` recipe gains a step that builds `cli/` (and `mcp/` — [mcp.mdx](./mcp.mdx) §4) after
+  `yarn build`.
+- **`just run` also builds the CLI**, through the same dependency chain, for the same reason.
+- **`cli/` has its own justfile** so it can be worked on alone: `cd cli && just build`,
+  `cd cli && just run -- accounts list`.
+- The shim self-builds as a backstop: `abx.mjs` compares source mtimes against `dist/` and compiles
+  when stale, so a freshly cloned repo works with zero setup steps even if nobody ran `just`.
+
+Handles: building the CLI whenever the app is built.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/justfile` — recipes `build`, `run`, `setup` (exist today; extend to cover `cli/` and `mcp/`)
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/justfile` — recipes `build`, `run`, `test`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/abx.mjs` — function `needsBuild()`
+
+### 2.4 Installation on PATH
+
+`cli/` goes on `PATH`; the shims are the only executables in it, so the entry stays clean:
+
+```bash
+export PATH="$HOME/BGit/Bryan_git/actual_budget_bryan/cli:$PATH"   # in ~/.zshrc, once
+```
+
+`just install-cli` prints exactly that line and, on request, appends it. It never edits a shell
+profile without being asked — a task runner that silently rewrites `~/.zshrc` is a task runner
+nobody trusts twice.
+
+---
+
+## 3. Bring-up — the CLI's justfile-equivalent duty
+
+### 3.1 The preflight (LOCKED)
+
+Every `abx` invocation that needs the machine plane begins with a liveness preflight:
+
+1. **Probe** `GET http://127.0.0.1:5006/health` with a ~2 s timeout. `{"status":"UP"}` → proceed.
+2. **If down, bring it up.** The CLI performs the same effective work as the root justfile's `setup`
+   - `server` recipes. It is **not required to shell out to `just`** — it must simply achieve the
+     same result, and invoking `just` is an acceptable implementation when `just` is present:
+   * install/build if needed (`yarn install`, `yarn build`) — the `setup` recipe's job;
+   * refuse, loudly, if a **foreign** process holds the port, exactly as the `run` recipe does —
+     never blanket-kill a port, because the pid on 5006 might be something the operator cares about;
+   * start the sync server detached, with stdout and stderr appended to
+     `~/T/_actual_budget/server.log`, never `/tmp`;
+   * **wait** for `/health`, bounded at 120 s, spinner running (§12).
+3. **If bring-up fails**, print the failure and the tail of `~/T/_actual_budget/server.log`, and
+   exit `2`. Never fall back to computing the answer locally — there is no local compute path (§5.4),
+   and a CLI that quietly answers from a different engine is worse than one that fails.
+
+### 3.2 What "up" means — three ports, one health gate (LOCKED)
+
+| Port   | Process                | What it serves                             | Is it the gate? |
+| ------ | ---------------------- | ------------------------------------------ | --------------- |
+| `3001` | Vite dev server        | the browser UI                             | **no**          |
+| `5006` | sync server (Express)  | sync, `/health`, and **the machine plane** | **yes**         |
+| —      | plugins-service worker | in-process                                 | no              |
+
+**FRONTEND UP ≠ APP UP.** The preflight gates on `:5006/health`, never on `:3001` answering HTTP.
+Vite serves pages happily with no server behind it, and a CLI that believed the UI port would report
+success while every call 404s. This is the identical trap Large File Bridge documented after losing
+an afternoon to it; we inherit the lesson rather than the afternoon.
+
+A second, narrower gate applies to any verb that uses the machine plane: `GET /machine/v1/ping`
+**with the key**. `/health` proves the process is alive; `ping` proves the machine plane is mounted
+and the key is right. A green `/health` with a 401 from `ping` is the single most likely first-run
+failure, and it gets its own message naming the credentials file (§4.5 R6).
+
+Handles: the health gate and the bring-up.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/code/src/bringup.ts` — `ensureServerUp()`, `failWithLogTail()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/app.ts` — `app.get('/health')` (exists today)
+Code: `~/BGit/Bryan_git/actual_budget_bryan/justfile` — recipes `run`, `stop`, `status` (exist today; the port-holder refusal is already written there)
+
+### 3.3 `abx up`, `abx stop`, `abx status`
+
+Steps 2–3 are also available explicitly, so the CLI is a complete operational surface on a machine
+where the operator never touches `just`:
+
+- `abx up` — bring the app up and wait for health. Idempotent; already-up is a success.
+- `abx stop` — stop **our** instance (the recorded pid tree, then node processes on the pinned
+  ports), never a foreign process.
+- `abx status` — what `just status` reports, plus the machine-plane `ping` result and the key's
+  fingerprint (first 4 hex + SHA-256 prefix, never the key).
+
+---
+
+## 4. Authentication — the local machine key
+
+### 4.1 Why not the sync-server password (LOCKED)
+
+The obvious answer is to reuse what upstream uses: `ACTUAL_PASSWORD`, or a session token from
+`POST /account/login`. We do not, for four reasons, each of which has a failure mode we can name:
+
+1. **It is a human credential.** It unlocks every budget on the server, from anywhere, for anyone
+   holding it. A CLI that reads it is a second place it can leak, and this repo is going public —
+   the pressure to "just put it in a config file" would be constant.
+2. **This repo is open source.** A credential-shaped config key inside the tree is a credential that
+   eventually gets committed. The machine key lives in `~/.credentials/`, outside the repo, and
+   there is no in-repo config key that can hold it (§17).
+3. **It does not scope.** The machine plane is a _local operator_ surface, not a user surface. It
+   should be able to read the statements tree and the state directory — things no remote session
+   should ever reach — and it should be unable to do so from anywhere but this machine. A password
+   grants the wrong set in both directions.
+4. **There is nothing to type.** A key both sides generate from the filesystem needs no prompt, no
+   paste, no onboarding step, and no secret in a shell history.
+
+The trade is stated plainly: this mechanism is **same-filesystem only**. It authenticates "a process
+running as this operator on this computer," and nothing else. When a hosted deployment arrives,
+machine callers get a real token scheme; the shared-file trick does not travel (§4.6).
+
+### 4.2 The credentials file (LOCKED)
+
+- **Location:** `~/.credentials/actual_budget.json`, mode `0600`, owned by the current uid.
+  Override the whole path with `ABX_CREDENTIALS_FILE`.
+- **Shape** — one top-level product object, so the file can hold other products' keys alongside:
+
+```json
+{
+  "actual_budget": {
+    "machine": {
+      "api_key": "<64 hex chars — 32 bytes from a CSPRNG>",
+      "created": "2026-09-20T17:04:11.221Z",
+      "created_by": "sync-server",
+      "label": "bryan-tower"
+    }
+  }
+}
+```
+
+`label` is provenance, not security: a key found in six months can be explained. `created_by` is one
+of `sync-server`, `abx`, `mcp`.
+
+- **Resolution order in the CLI, first hit wins:**
+  1. `ABX_MACHINE_KEY` (env)
+  2. `ABX_MACHINE_KEY_FILE` (env — a path to a file containing the key; the Docker-secret shape)
+  3. `~/.credentials/actual_budget.json` → `actual_budget.machine.api_key`
+  4. generate it (§4.3)
+
+### 4.3 Generation — whichever side needs it first (LOCKED)
+
+The operator never creates this by hand.
+
+- If the **sync server** boots and `actual_budget.machine.api_key` is missing, it generates
+  `crypto.randomBytes(32).toString("hex")` and writes it.
+- If **`abx`** runs and the field is missing, it does the same.
+- If the **MCP server** starts and the field is missing, it does the same
+  ([mcp.mdx](./mcp.mdx) §6).
+- **Whichever writes first wins; the others read it.** The write is atomic — write a sibling temp
+  file in the same directory, `fsync`, `chmod 0600`, `rename` — and it **merges** into the existing
+  JSON rather than replacing it. Three unrelated products may share `~/.credentials/`; a writer that
+  serialises the file whole from memory is the one program most likely to delete somebody else's
+  Google client secret at 2 a.m.
+- The parent directory is created with mode `0700` if absent.
+- `O_EXCL` on the temp file, and the write **refuses to follow a symlink** at the destination.
+
+Handles: minting, merging and reading the machine key.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/code/src/credentials.ts` — `ensureMachineKey()`, `loadMachineKey()`, `writeMerged()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/credentials-file.ts` — `ensureMachineKey()`, called at boot from `src/app.ts`
+
+### 4.4 How the key is sent, and how the server checks it (LOCKED)
+
+- The CLI sends it on **every** machine-plane call, in the header
+  **`X-Actual-Machine-Key: <64 hex>`**. Never in a query string — a query string lands in access
+  logs and shell history.
+- The server checks, **in this order, before any handler runs**:
+  1. **Loopback gate.** `req.socket.remoteAddress` must be `127.0.0.1` or `::1`, and the app must
+     not be behind a trusted proxy for this route. A non-loopback request gets **404**, not 403 —
+     off this machine, the machine plane does not exist, and an attacker learns nothing from probing
+     it.
+  2. **Key gate.** `crypto.timingSafeEqual` over equal-length buffers, **never `===`**. A length
+     mismatch still runs a fixed-length dummy comparison, because `timingSafeEqual` throws on
+     unequal lengths and an unguarded call is itself a timing oracle.
+  3. **Mode gate.** Is this route available in this launch mode? Reads always; writes only when the
+     write tier is enabled (§5.2).
+  4. **Input gate.** The route's schema. Unknown keys stripped, limits clamped rather than rejected.
+- A missing or wrong key → **`401` with a constant body**, `{"ok":false,"error":{"code":"unauthorized"}}`,
+  which never distinguishes missing from wrong. The _server_ keeps its silence; the _client_ does the
+  explaining (R6).
+- **Mode check before read.** Both the server and the CLI `stat` the credentials file before reading
+  and refuse a file looser than `0600` or owned by another uid, exiting `2` with
+  `fix: chmod 600 ~/.credentials/actual_budget.json`. A world-readable shared secret is a finding,
+  not a warning.
+
+Handles: the loopback gate, the constant-time key check, and the 401 body.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/machine-auth.ts` — `machineAuthMiddleware()`, `isLoopback()`, `constantTimeEquals()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/code/src/client.ts` — `call()` (attaches the header, maps 401 to the R6 message)
+
+### 4.5 The rules, stated once
+
+**R1 — The key is 256 bits from a CSPRNG.** `crypto.randomBytes(32).toString("hex")`. Not a UUID,
+not a timestamp, not a hash of the hostname.
+
+**R2 — The key is never logged, never echoed in an error, never in a response body, never in the
+audit trail.** Only its **fingerprint** — first 4 hex characters plus a SHA-256 prefix — so two
+people can confirm they hold the same key without exchanging one.
+
+**R3 — The key is never attached to a URL that is neither loopback nor `https:`.** Checked in the
+client before the socket opens; the refusal names the URL. `--api http://some-host:5006` would put
+the key in cleartext on somebody's network, and a bare `401` would have taught the operator to
+retry it.
+
+**R4 — The CLI never rotates the key implicitly.** `abx key rotate` exists, requires `--yes`, prints
+the new fingerprint, and tells the operator to restart the server and re-run `claude mcp` nothing —
+the MCP reads the same file, so nothing else needs touching. A rotation that happened as a side
+effect of an ordinary verb would break the MCP silently.
+
+**R5 — The CLI never writes any key it did not generate.** No `abx key set <value>`. Pasting a
+secret into a CLI puts it in shell history; pasting it into a `0600` file with an editor does not.
+
+**R6 — A missing key is a LOUD local failure with the remedy, never a silent 401.** The CLI knows
+exactly which file it failed to read, and says so:
+
+```
+abx accounts list
+  refused: no machine key for http://127.0.0.1:5006
+  Looked in: ABX_MACHINE_KEY, ABX_MACHINE_KEY_FILE,
+             ~/.credentials/actual_budget.json  (actual_budget.machine.api_key)
+  The app mints this on first boot. Start it and try again:
+    abx up
+  Or mint it here without starting anything:
+    abx key init
+```
+
+The shipped-elsewhere behaviour this rule exists to prevent is `if (key) headers[...] = key` — a
+missing key simply omits the header, the whole failure surfaces as a server 401 with a deliberately
+uninformative body, and the operator goes looking for a server problem that is not there.
+
+**R7 — One key per install, resolved from the resolved target, never from a global.** A future second
+install (a second checkout on its own port) reads its own key. The CLI never falls back from one
+target's key to another's: sending the wrong key is not a security hole (the server answers 401 and
+nothing happens) — it is a **diagnosis** hole, because a 401 looks exactly like "the key is wrong"
+and sends an operator to rotate a perfectly good key.
+
+**R8 — The key authorises a MACHINE, not a person.** It carries no user identity, grants no access
+to another operator's budget files on a shared sync server, and is not accepted by any route outside
+`/machine/v1`. `POST /sync/*`, `/account/*` and `/admin/*` keep their own auth untouched.
+
+**R9 — Fail closed.** With no key configured on the **server** side, the machine plane is **not
+mounted at all** and `/machine/v1/*` 404s. An unauthenticated machine plane is never a fallback.
+
+**R10 — The CLI never reads a human credential.** Restated from §1.3 because it is a security rule as
+much as a scoping one.
+
+### 4.6 What the key is NOT
+
+- Not an encryption key. It authenticates a caller; it encrypts nothing. End-to-end budget
+  encryption is a separate, unrelated mechanism owned by `@actual-app/api`.
+- Not a session. It does not expire, does not refresh, and carries no claims. Rotation is manual and
+  rare.
+- Not transferable. Copying it to another computer gets that computer a `404`, because the loopback
+  gate rejects the request before the key is read. **This is the property the whole design rests
+  on**, and it is why there is no "authentication" to configure: a secret that only helps you if you
+  are already on the machine is not much of a secret to steal.
+
+---
+
+## 5. The machine plane — the HTTP surface `abx` speaks
+
+### 5.1 Where it is mounted, and why there
+
+The sync server (`packages/sync-server`) is the repo's only long-running Node process. It already
+has Express, a config system, `/health`, `/info`, `/metrics`, and a place to hold state. The machine
+plane mounts there:
+
+```ts
+app.use('/machine/v1', machineAuthMiddleware, machineApp.handlers); // packages/sync-server/src/app.ts
+```
+
+Behind it, budget access goes through **`@actual-app/api`** — the same engine the browser drives —
+held as one initialised instance for the process lifetime, so a run of ten `abx` calls does not
+download the budget ten times.
+
+**Rejected: a new standalone server.** A second process is a second thing to start, a second port to
+pin, a second health endpoint to get wrong, and a second place the budget can be open for writing at
+the same time as the first. One writer, one process.
+
+**Rejected: routes on the Vite dev server.** It does not exist in production and it is not ours.
+
+### 5.2 The route table
+
+Read routes are always available. Write routes require the write tier
+(`ACTUAL_MACHINE_ALLOW_WRITE=1` on the server, and `--write` on the CLI call — both, not either).
+
+| Route                                                    | Verb              | Tier      | Answers                                                                                |
+| -------------------------------------------------------- | ----------------- | --------- | -------------------------------------------------------------------------------------- |
+| `/machine/v1/ping`                                       | GET               | read      | liveness + key check + server version + budget id                                      |
+| `/machine/v1/budgets`                                    | GET               | read      | the budget files this install knows                                                    |
+| `/machine/v1/accounts`                                   | GET               | read      | accounts, with balances                                                                |
+| `/machine/v1/accounts/:id/balance`                       | GET               | read      | one balance, as of an optional cutoff                                                  |
+| `/machine/v1/transactions`                               | GET               | read      | transactions for an account and date range                                             |
+| `/machine/v1/categories` · `/category-groups`            | GET               | read      | the category tree                                                                      |
+| `/machine/v1/payees` · `/tags` · `/rules` · `/schedules` | GET               | read      | the reference data                                                                     |
+| `/machine/v1/budget/months` · `/budget/month/:month`     | GET               | read      | budget months                                                                          |
+| `/machine/v1/query`                                      | POST              | read      | one ActualQL query, read-only-guarded                                                  |
+| `/machine/v1/statements/scan`                            | POST              | read      | the statements tree, grouped and de-duplicated (§10.2–10.4)                            |
+| `/machine/v1/statements/plan`                            | POST              | read      | the full import plan: rows, `imported_id`s, what Actual would call a duplicate (§10.8) |
+| `/machine/v1/statements/apply`                           | POST              | **write** | run the plan through `importTransactions`                                              |
+| `/machine/v1/transactions`                               | POST/PATCH/DELETE | **write** | add / update / delete                                                                  |
+| `/machine/v1/budget/month/:month/category/:id`           | PATCH             | **write** | set an amount or carryover                                                             |
+| `/machine/v1/sync`                                       | POST              | **write** | sync now                                                                               |
+
+The route-by-route reference (arguments, response fields, per-route errors) lives with the server;
+this table is the contract the CLI is written against.
+
+### 5.3 Response envelope (LOCKED)
+
+Every machine-plane response — success or failure — is one JSON object of the same shape:
+
+```json
+{ "ok": true,  "data": { }, "meta": { "target": "local", "budgetId": "…", "serverVersion": "26.9.0", "tookMs": 41 } }
+{ "ok": false, "error": { "code": "not_found", "message": "No account with that id.", "hint": "abx accounts list" } }
+```
+
+`hint` always names a remediation. The closed error vocabulary is
+`unauthorized` · `forbidden` · `not_found` · `invalid_input` · `conflict` · `write_disabled` ·
+`not_ready` · `upstream_error` · `internal`. A tenth code is a spec change, not a commit.
+
+### 5.4 The thin-client rule (LOCKED)
+
+**The CLI owns argument parsing, output formatting, and bring-up. It owns no budget logic.**
+
+Every balance, every date-range filter, every reconciliation decision, every "is this a duplicate"
+verdict is computed behind the machine plane and returned verbatim. The CLI never re-filters, never
+re-sums, never rounds, and never stats a file the server already described. One engine powers the
+browser, the CLI and the MCP, so the three can never disagree — and a bug fixed for one is fixed for
+all three.
+
+The rendering layer is the one exception, and it is bounded: converting integer cents to a decimal
+string for `--format table` and `--format csv` is _presentation_, it happens in exactly one function,
+and `--format json` always carries the raw integer (§13.2).
+
+---
+
+## 6. The verb catalogue
+
+One page, so the whole surface is visible before any one verb's contract is read.
+
+```
+ORIENTATION
+  abx                                  the zero-argument default — status + what needs doing (§8)
+  abx status                           ports, health, machine-plane ping, key fingerprint
+  abx doctor                           is this environment sane? (§11.1)
+  abx up | stop                        bring the app up / take it down (§3.3)
+  abx logs [--follow]                  tail ~/T/_actual_budget/dev.log and server.log
+  abx key init | show | rotate --yes   the machine key (§4)
+
+READING THE BUDGET
+  abx accounts list [--include-closed]
+  abx accounts balance <id> [--as-of YYYY-MM-DD]
+  abx transactions list --account <id> [--start D] [--end D] [--uncategorized]
+  abx categories list | abx category-groups list
+  abx payees list | abx tags list | abx rules list | abx schedules list
+  abx budget months
+  abx budget month <YYYY-MM>
+  abx query --table <t> --select <f,f> [--filter <json>] [--limit N]
+
+THE STATEMENTS PIPELINE  (§10 — the flagship)
+  abx statements scan   [PATH] [--entity E] [--bank B] [--account A] [--year Y]
+  abx statements missing [PATH]                     which account-months have no statement
+  abx statements extract [PATH] [--force]           PDF/sidecar -> rows, into the staging dir
+  abx statements dupes  [PATH]                      what the two de-dupe layers collapsed, and why
+  abx statements plan   --map <file.yaml>           the full import plan. Changes nothing
+  abx statements apply  --map <file.yaml> --write --yes    run the plan (§10.8)
+
+WRITING  (each needs --write, and the server's write tier)
+  abx transactions add --account <id> --data <json> --write
+  abx budget set-amount --month <YYYY-MM> --category <id> --amount <cents> --write
+  abx sync --write
+```
+
+Every verb accepts the universal flags in §7.1. Every verb prints its answer on stdout and
+everything else on stderr (§13.1).
+
+---
+
+## 7. The argument contract
+
+**Positional first, flags anywhere.** A `--flag` is a boolean unless it is in the parser's
+`takesValue` set, in which case it consumes the next argument.
+
+### 7.1 The universal flags
+
+| Flag                        | Meaning                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `--format json\|table\|csv` | what stdout carries. **`json` is the default** (§13.2)                         |
+| `--write`                   | actually write. Without it, every write verb is a dry run that prints the plan |
+| `--yes`                     | confirm a write that would change more than `--max-changes` rows (default 200) |
+| `--api <url>`               | talk to a different install. Loopback or `https:` only (R3)                    |
+| `--timeout <ms>`            | per-call timeout. **Ignored by `statements apply`** (§7.4)                     |
+| `--no-bringup`              | never start the app; if it is down, fail with exit `2`                         |
+| `--quiet`                   | no spinner, no progress, no informational stderr. Errors still print           |
+| `--verbose`                 | informational stderr lines, plus the resolved target and key fingerprint       |
+| `--json-errors`             | errors on stderr as one JSON object per line, for scripts                      |
+| `--help` / `-h`             | usage                                                                          |
+
+### 7.2 Target resolution — this machine is the default (LOCKED)
+
+| Mode      | How                   | Base URL                | When it is right                                                                                |
+| --------- | --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
+| **local** | nothing, or `--local` | `http://127.0.0.1:5006` | **the default.** Every verb. This is a local-first product and the local install is the subject |
+| explicit  | `--api <url>`         | whatever was typed      | a second checkout on another port, a colleague's box over a tunnel                              |
+
+There is deliberately **no `--prod`**. Actual Budget has no production install of ours; a sync server
+is a relay, not a second copy of the truth. If one ever exists, it arrives as a flag in this table
+with its own key row in §4.2, and not before.
+
+The resolved target is printed once on stderr under `--verbose`, and **always** printed before any
+write, in the run summary. A run that reports success against the wrong install is not a crash — it
+is a thing discovered a week later by somebody looking for rows that are on another machine.
+
+### 7.3 R-rule: a new value-taking flag joins `takesValue` in the SAME edit
+
+This is the one recurring bug in tools of this shape, and it is silent. An absent entry makes the
+flag a **boolean**, so `--start 2026-01-01` is read as `--start` true plus a stray positional, and
+the verb either drops the date or takes the date as its subject. The parser therefore **warns on
+stderr** when a `--flag` outside the set is followed by a non-`--` token, naming the file to edit.
+The warning is not the fix; it is the smoke alarm.
+
+Value-taking flags today: `--format --api --timeout --max-changes --account --start --end --as-of
+--month --category --amount --table --select --filter --limit --data --map --entity --bank --year
+--out --since --reason`.
+
+### 7.4 No client-side timeout on the long verbs (LOCKED)
+
+`abx statements extract` and `abx statements apply` run with **no client-side timeout**. Extracting
+four hundred PDFs is a long request, and a client that gives up at thirty seconds reports a failure
+about a job that is running perfectly — then the operator re-runs it, and now two extractions are
+writing the same staging directory. The spinner (§12) is what stops it looking hung. `--timeout` is
+accepted on those verbs and ignored, with one stderr note saying so.
+
+---
+
+## 8. The zero-argument default — bare `abx` (LOCKED)
+
+Running `abx` with no arguments must do something immediately useful, with no setup and no reading
+of help. It prints a short **orientation report** and exits `0`:
+
+```
+Actual Budget — this machine
+  web          http://localhost:3001/   down
+  sync server  http://localhost:5006/   UP    (pid 48213)
+  machine key  ~/.credentials/actual_budget.json   ok   (a3f1… / sha256:9c2b)
+  budget       "Bryan personal"   last synced 3 minutes ago
+
+  4 accounts, 2 with uncategorized transactions (61 rows)
+  statements   /Users/bryan/…/bank_statements   412 PDFs, 7 account-months missing, 3 duplicate scans
+
+  abx doctor              check the environment
+  abx statements scan     look at the statements tree
+  abx accounts list       the accounts
+```
+
+Rules:
+
+- It **never starts the app**. Bare `abx` is a question, not an instruction; if the server is down it
+  says so and suggests `abx up`.
+- It never fails because something is down. A down server, a missing key, an unconfigured statements
+  root — each prints as a line in the report with the command that fixes it. Exit is `0` unless the
+  environment is broken in a way that makes the report itself a lie, in which case `1`.
+- **Help moves off the bare invocation.** `abx help`, `abx -h`, `abx --help` print the verb catalogue
+  and exit `0`; an unknown verb prints it and exits `2`.
+- The paths it prints are full absolute paths, always — they are the interchange format, and a path
+  the operator can paste is worth four lines of prose.
+
+---
+
+## 9. The read verbs
+
+The read verbs are thin by construction: parse, call one route, render. They exist here because a
+shell is a better place than a browser to pipe an answer into something else.
+
+- **`abx accounts list`** — id, name, type, closed, balance. `--include-closed` adds closed
+  accounts; the default excludes them.
+- **`abx accounts balance <id> [--as-of YYYY-MM-DD]`** — one integer. With `--format json`, the
+  envelope; with `--format table`, a decimal; with `--format csv`, a single row. A cutoff date asks
+  the server for a historical balance; the CLI does not sum transactions to get one.
+- **`abx transactions list --account <id> [--start] [--end]`** — the rows.
+  **Split transactions:** the response carries `is_parent` and `is_child` verbatim. The CLI does not
+  filter them, and the `--format table` renderer marks a parent row so a human summing the column by
+  eye is not double-counting. A script that sums must filter `is_parent == false`; this is called out
+  in `--help` because it is the single most common wrong number anyone gets out of a budget tool.
+- **`abx categories list`**, **`category-groups list`**, **`payees list`**, **`tags list`**,
+  **`rules list`**, **`schedules list`** — reference data, one route each.
+- **`abx budget months`** and **`abx budget month <YYYY-MM>`** — the budget. §10 of
+  [mcp.mdx](./mcp.mdx) states the rule that governs the output here too, and it is worth repeating:
+  **a category with no budget entry is not a category budgeted zero**, and the renderer must print
+  them differently (`—` versus `0.00`) in every format.
+- **`abx query`** — one ActualQL query, guarded read-only on the server. The guard is the server's,
+  not the CLI's: a client-side check the server does not repeat is a hole.
+
+---
+
+## 10. The statements pipeline — `abx statements`
+
+This is the family `abx` exists for, and the only one with no counterpart in the browser or in
+`@actual-app/cli`.
+
+### 10.1 What the tree looks like on disk
+
+The operator's statements live **outside this repo**, under a configured root. On this machine that
+is `~/BGit/Bryan_git/Bryan_Arindom/bank_statements/`, and the layout is:
+
+```
+{ROOT}/
+├── {ENTITY}/                                  act3, personal, WH_INC, WH_INTL, Earth9, ZTM…
+│   └── {BANK}/                                Chase, Wells_Fargo…
+│       └── {ACCOUNT}/                         Checking_x8130, Savings_x8155…
+│           └── {YYYY}/{MM}/
+│               ├── 20220930-statements-8130-.pdf        the source of truth
+│               ├── 20220930-statements-8130-_brew.txt   pdftotext/pandoc extraction
+│               ├── 20220930-statements-8130-_ocr.txt    OCR extraction
+│               └── 20220930-statements-8130-_claude.txt LLM extraction
+└── import/                                    THE STAGING DIRECTORY — the only place we write
+```
+
+**The root is configuration, never a constant in the code** (§17). It is resolved:
+`--path` on the call → `ABX_STATEMENTS_DIR` → `actual_budget.statements.root` in
+`~/.credentials/actual_budget.json` → no root, and the verb refuses with the name of the setting.
+
+**Nothing under `{ROOT}` is ever written, moved, renamed or deleted except under `{ROOT}/import/`.**
+The PDFs are the operator's financial records and some of them are the only copy.
+
+### 10.2 Stage 1 — discover (`abx statements scan`)
+
+Walk the root; classify every file. For each PDF, derive a **statement identity**:
+
+| Field                             | From                                                                       | Notes                                                               |
+| --------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `entity` · `bank` · `account_dir` | the path                                                                   | the directory names, verbatim                                       |
+| `account_last4`                   | the account directory and the filename                                     | both are checked, and a **disagreement is reported, never guessed** |
+| `period_end`                      | the leading `YYYYMMDD` of the filename, else the `{YYYY}/{MM}` directories |                                                                     |
+| `period`                          | `YYYY-MM`                                                                  | the de-duplication bucket                                           |
+| `sha256`                          | the PDF bytes                                                              | the identity for "the same file twice"                              |
+| `sidecars`                        | `_claude.txt`, `_brew.txt`, `_ocr.txt`                                     | which extractions already exist                                     |
+
+`scan` prints a grouped report: entity → bank → account → year, with counts, and flags three things
+loudly — **missing months**, **duplicate scans** (§10.4), and **PDFs with no usable extraction**.
+It changes nothing.
+
+`abx statements missing` is the same walk with only the gaps printed, one `ENTITY/BANK/ACCOUNT
+YYYY-MM` per line on stdout, so it pipes into whatever fetches them.
+
+### 10.3 Stage 2 — extract (`abx statements extract`)
+
+For every statement with no usable rows yet, produce rows. **Extraction source preference, highest
+fidelity first:**
+
+1. `*_claude.txt` — an LLM extraction, best at tables that survived a bad scan
+2. `*_brew.txt` — `pdftotext`/`pandoc`, best at clean digital PDFs
+3. `*_ocr.txt` — OCR, the fallback for image-only scans
+4. the PDF itself, via the server's own text extraction
+
+**Every produced row records which source it came from** (`source_file`, `source_kind`,
+`source_line`). A wrong number six months from now must be traceable to the exact file and line that
+produced it, and "the extractor was OCR" is usually the answer.
+
+A statement whose extraction yields **zero** rows is not silently skipped: it is reported by name,
+counted separately, and `extract` exits `1` if any statement failed to yield rows — because a silent
+zero is how a whole year goes missing.
+
+`--force` re-extracts statements that already have rows. Without it, extraction is incremental and a
+second run is cheap.
+
+### 10.4 Stage 3 — de-duplication, layer one: the STATEMENT level (LOCKED)
+
+_The same month, scanned twice._ This layer is about files.
+
+Group every discovered statement by **(`entity`, `bank`, `account_last4`, `period`)**. Within a
+group of more than one:
+
+1. **Identical bytes** (equal `sha256`) → they are one statement. Keep the shortest path; the others
+   are `duplicate_identical`.
+2. **Different bytes** → they are candidate versions of the same statement. Rank them:
+   1. more extracted rows wins (a truncated scan loses to a complete one);
+   2. then a wider covered date range wins;
+   3. then the better extraction source wins (`_claude` > `_brew` > `_ocr` > pdf);
+   4. then the newer file mtime wins;
+   5. then the lexicographically first path wins — so the outcome is **deterministic**, and two runs
+      on two machines choose the same winner.
+      The winner is `primary`; the rest are `superseded`, each recording `superseded_by` and **which
+      rule decided it**.
+3. **A group where the two candidates disagree on the rows themselves** — same period, similar row
+   count, but transactions present in one and absent in the other — is **not** resolved by ranking.
+   It is reported as `conflict`, both files named, and it **blocks** `apply` for that account-month
+   until the operator picks with `--prefer <path>`. Choosing silently here is choosing which
+   transactions exist.
+
+Nothing is deleted. Superseded statements stay on disk and stay in the manifest; "duplicate" is a
+verdict recorded about a file, not an action taken on it.
+
+`abx statements dupes` prints exactly this: every group with more than one member, the verdict, the
+rule that decided it, and the rows that differ in the `conflict` case.
+
+### 10.5 Stage 4 — normalise to rows
+
+Each surviving row becomes one canonical record:
+
+| Field                                         | Type           | Rule                                                                                    |
+| --------------------------------------------- | -------------- | --------------------------------------------------------------------------------------- |
+| `date`                                        | `YYYY-MM-DD`   | the transaction date, not the posting date, when the statement gives both               |
+| `amount_cents`                                | signed integer | **integer cents, always.** Negative is money out. Never a float, anywhere, ever (§13.3) |
+| `payee`                                       | string         | the statement's description, with the bank's noise stripped by a per-bank normaliser    |
+| `notes`                                       | string         | the raw description, unmodified, so nothing is lost by normalisation                    |
+| `imported_id`                                 | 32 hex         | §10.6                                                                                   |
+| `source_file` · `source_kind` · `source_line` | string         | provenance (§10.3)                                                                      |
+| `ordinal`                                     | integer        | §10.6 — the two-coffees field                                                           |
+
+The per-bank normaliser is a **table, not code per bank**: a list of `{bank, pattern, replacement}`
+rules with a test fixture each. A bank we have never seen gets the identity normaliser and works.
+
+### 10.6 Stage 5 — de-duplication, layer two: the TRANSACTION level (LOCKED)
+
+_The same transaction, seen twice._ This layer is about rows, and it is the one that has to be right.
+
+**`imported_id` is deterministic, and it is the whole mechanism.**
+
+```
+imported_id = sha256(
+    account_key   || "\u0000" ||   # {entity}/{bank}/{account_last4} — NOT the Actual account id
+    date          || "\u0000" ||   # YYYY-MM-DD
+    amount_cents  || "\u0000" ||   # signed integer, base 10, no separators
+    payee_norm    || "\u0000" ||   # the normalised payee, casefolded, whitespace collapsed
+    ordinal                        # see below
+).slice(0, 32)
+```
+
+Four properties follow, and each one is a failure we are choosing not to have:
+
+1. **It does not depend on the file.** Two PDFs of January produce byte-identical `imported_id`s for
+   the same transaction, so the row collapses even when statement-level de-duplication chose to keep
+   both files. Layer one is about files; layer two does not trust layer one.
+2. **It does not depend on the run.** A re-run next week mints the same ids, so importing twice is a
+   no-op rather than a doubling. This is what makes the pipeline safe to run on a cron.
+3. **It does not depend on the Actual account id.** The account can be deleted and recreated and the
+   ids still match, because the key is the _bank's_ account, which is the thing that is actually
+   stable.
+4. **It survives re-categorisation.** Category, cleared status and notes are deliberately **not** in
+   the hash — those are things the operator changes after import, and an id that changed when they
+   did would re-import every edited row as a new transaction.
+
+### 10.6a The two-coffees problem, and the `ordinal` field (LOCKED)
+
+> **Two identical $5.00 coffees on the same day at the same shop are TWO transactions, and a
+> de-duplicator that collapses them has destroyed data.**
+
+Everything in the hash except `ordinal` is identical for those two rows. `ordinal` is **the
+zero-based index of this row among rows with an identical (date, amount, payee) tuple within the
+same account-month**, assigned in statement order.
+
+- Two coffees → ordinals `0` and `1` → two different ids → two transactions. Correct.
+- The same month scanned twice → both scans see coffee-0 and coffee-1 in the same order → identical
+  ids → they collapse. Correct.
+- A statement that lists the same day's transactions in a different order than another statement of
+  the same month → the ordinals could swap between the two rows, but the **set** of ids is identical,
+  so the set still collapses correctly. The only visible effect is which source file a given row
+  claims, which is recorded and harmless.
+
+The alternative — including a running balance or a line number in the hash — was rejected: a line
+number changes when the extractor changes, and a running balance is absent from a third of the
+statements we hold.
+
+### 10.6b Actual's importer is the authority, not us (LOCKED)
+
+The pipeline computes `imported_id` and then **hands the rows to `importTransactions()`** — Actual's
+own importer — which reconciles on `imported_id` and additionally performs fuzzy date/amount
+matching against transactions that already exist.
+
+**We never decide, ourselves, that a row already exists in the budget.** Our two layers de-duplicate
+_the import set_; Actual de-duplicates _against the ledger_. This is the same rule as §5.4, applied
+where it matters most: if our notion of "already there" ever diverged from the app's, the CLI would
+create phantom rows the UI insists are not duplicates, and reconciling that by hand is a weekend.
+
+Handles: minting ids, the two de-dupe layers, and handing off to the importer.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/identity.ts` — `mintImportedId()`, `assignOrdinals()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/dedupe.ts` — `dedupeStatements()` (layer one), `dedupeRows()` (layer two)
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/statements/apply.ts` — `applyPlan()` → `api.importTransactions()`
+Code: `~/BGit/Bryan_git/actual_budget_bryan/packages/api/methods.ts` — `importTransactions()` (exists today — the reconciliation authority)
+
+### 10.7 Stage 6 — the staging directory contract (LOCKED)
+
+Everything the pipeline produces lands under `{ROOT}/import/`, and nowhere else:
+
+```
+{ROOT}/import/
+├── _manifest.csv        one row per source file ever seen
+├── _rows.csv            every de-duplicated row, across every account — the full import set
+├── _dupes.csv           every row and every file that was collapsed, and the rule that collapsed it
+├── _conflicts.csv       the §10.4 rule-3 cases that block apply
+├── _run.log             append-only: run id, timestamp, counts, outcome
+└── {ENTITY}/{BANK}/{ACCOUNT}/
+    ├── {YYYY}-{MM}.csv  the canonical de-duplicated rows for that account-month
+    └── _all.csv         every month for that account, still de-duplicated
+```
+
+`_manifest.csv` columns:
+`path,sha256,bytes,mtime,entity,bank,account_last4,period,period_end,source_kind,rows,status,superseded_by,rule,first_seen,last_seen`
+— `status` is one of `primary`, `duplicate_identical`, `superseded`, `conflict`, `unreadable`.
+
+The per-account-month CSV columns:
+`date,amount_cents,amount,payee,notes,imported_id,source_file,source_kind,source_line,ordinal`
+— `amount` is the decimal rendering, present for humans and **ignored by every importer**;
+`amount_cents` is the number that counts (§13.3).
+
+- The staging directory is **rebuildable from the source tree at any time**. Deleting it loses
+  nothing but time. Nothing downstream may treat it as a system of record.
+- Writes are atomic per file (temp + rename), so an interrupted run never leaves a half-written CSV
+  that a later run would import.
+- `{ROOT}/import/` gets a `.gitignore` containing `*` on first write, because the operator's
+  statements tree is itself a git repo and these are derived files with real financial data in them.
+
+### 10.8 Stage 7 — plan and apply
+
+**`abx statements plan --map <file.yaml>`** produces the full import plan and **changes nothing**.
+The map file is how the operator connects the statements tree to the budget:
+
+```yaml
+# statements-map.yaml — lives with the statements, NOT in this repo
+accounts:
+  - match: { entity: personal, bank: Chase, account_last4: '8130' }
+    actual_account_id: 5a0e… # or: actual_account_name: "Chase Checking"
+    start: 2022-09-01 # optional: ignore anything earlier
+  - match: { entity: act3, bank: Chase, account_last4: '8155' }
+    actual_account_name: 'ACT3 Savings'
+```
+
+The plan prints, per account:
+
+```
+personal / Chase / Checking_x8130  ->  "Chase Checking" (5a0e…)
+  statements      41 primary, 3 superseded, 0 conflicts
+  rows          1,904 extracted  ->  1,871 after de-dupe  (33 collapsed)
+  vs. budget    1,742 already present (matched on imported_id)
+                   12 fuzzy matches Actual would reconcile
+                  117 NEW
+                    0 would be modified
+  date range    2022-09-01 .. 2026-08-31
+```
+
+**Nothing is applied without three things at once:** `--write`, `--yes`, and a server with the write
+tier enabled. Any conflict from §10.4 rule 3 blocks the account it belongs to — the other accounts
+still apply, and the blocked one is named.
+
+**`abx statements apply`** then runs the plan, prints Actual's own per-account result
+(`added` / `updated` counts, verbatim from `importTransactions`), appends to `_run.log`, and exits
+`0` only if every account succeeded.
+
+- **The plan is re-computed at apply time, never replayed from the file.** A plan printed an hour ago
+  against a budget that has since changed is a stale plan, and applying it would import rows that now
+  exist. `apply` recomputes and, if the new plan differs from the one the operator just saw, prints
+  the difference and requires `--yes` again.
+- `--max-changes N` (default 200) refuses a run that would add more than N rows without a second
+  `--yes`. The first real run of a ten-year archive is supposed to be a deliberate act.
+- `--dry-run` is the default. `plan` is `apply --dry-run` with prettier output.
+
+### 10.9 What the pipeline never does
+
+- Never writes, moves, renames or deletes anything under `{ROOT}` outside `{ROOT}/import/`.
+- Never deletes a transaction in the budget. The pipeline is additive; removing something is a human
+  act in the UI.
+- Never guesses a category. Categorisation is Actual's rules engine's job, and it runs on import
+  because the rows go through the app's importer (§10.6b).
+- Never invents a date or an amount it could not read. An unparseable row is reported by name in
+  `_conflicts.csv` and counted; it is never silently dropped and never rounded into existence.
+- Never uploads a statement anywhere. Extraction is local.
+
+---
+
+## 11. The operational verbs
+
+### 11.1 `abx doctor`
+
+No arguments. Prints a report and exits `1` if any REQUIRED check failed:
+
+| Check                                             | Required? | What a failure means                                                              |
+| ------------------------------------------------- | --------- | --------------------------------------------------------------------------------- |
+| Node ≥ 22                                         | yes       | `package.json` `engines`; the repo will not build below it                        |
+| `yarn` ≥ 4.9.1 present                            | yes       | the root scripts will not run                                                     |
+| State dir `~/T/_actual_budget` writable           | yes       | `mkdir -p` + `access(W_OK)`; a read-only state dir is a server that will not boot |
+| Credentials file exists, mode `0600`, owned by us | yes       | §4.4                                                                              |
+| `:5006` reachable, `/health` UP                   | **no**    | "is my environment sane" and "is the server up" are different questions           |
+| `/machine/v1/ping` with the key                   | no        | reports `401` distinctly from `404` — the two have completely different fixes     |
+| Statements root configured and readable           | no        | informational; only the `statements` family needs it                              |
+| `:3001` holder                                    | no        | prints the pid and process name if something foreign holds it                     |
+| `abx` on `PATH` and pointing at this checkout     | no        | catches the second-checkout confusion                                             |
+
+### 11.2 `abx logs`
+
+Tails the two files the app writes under the state root: `~/T/_actual_budget/dev.log` (the web dev
+tree, written by `just run`) and `~/T/_actual_budget/server.log` (the sync server). `--follow` for
+`tail -f` behaviour, `--lines N` for the tail size. It prints paths first, so an operator can leave
+and open them in an editor.
+
+### 11.3 `abx key`
+
+`init` (mint if absent, print the fingerprint), `show` (path, mode, owner, fingerprint, `created`,
+`created_by`, `label` — **never the key**), `rotate --yes` (mint a new one, atomic-merge it, print
+the new fingerprint, and remind the operator to restart the server so it reloads).
+
+---
+
+## 12. Progress UI — the CLI must never look hung (LOCKED)
+
+Some answers take real time: a cold bring-up, an extraction over four hundred PDFs, an import plan
+against ten years of rows. **While the CLI is working, it shows that it is working.**
+
+- **What it looks like:** one self-updating line on **stderr** — a spinner frame, a plain-English
+  phase, elapsed seconds, and a count where a count is honest:
+  `⠹ Extracting statements… 148/412  1m12s`. One line, redrawn in place; never a scrolling wall.
+- **Phases that show it:** the `/health` wait during bring-up (§3 — the up-to-120 s wait is exactly
+  where an operator assumes a hang), extraction, plan, and apply.
+- **TTY-gated.** The spinner renders only when stderr is a TTY. Piped stderr (scripts, cron, CI)
+  gets the ordinary one-line status messages and no animation. `--quiet` suppresses both.
+- **stdout is never touched by progress**, spinner or not. `abx statements missing | wc -l` stays a
+  count of months.
+- **Cleanup contract:** the line is fully erased before any result, error or log tail prints. No
+  spinner residue ever prefixes real output, including on failure paths.
+- Percentages are printed only where a denominator is known. Elapsed time is the honest signal
+  otherwise, and the phase text names what we are waiting on, so a stuck phase is diagnosable at a
+  glance.
+
+Handles: the progress line.
+Code: `~/BGit/Bryan_git/actual_budget_bryan/cli/code/src/progress.ts` — class `Spinner` (`start()`, `tick()`, `stop()`)
+
+---
+
+## 13. Output contracts
+
+### 13.1 stdout is the answer; everything else is stderr (LOCKED)
+
+stdout carries **exactly one payload** — the JSON, the table, the CSV, the list of paths. The
+spinner, warnings, the resolved target, the run summary, and every progress line go to **stderr**.
+
+This is load-bearing, and the test is concrete: `abx statements missing > gaps.txt` must produce a
+file with nothing in it but `ENTITY/BANK/ACCOUNT YYYY-MM` lines, and
+`abx accounts list --format json | jq '.data[].name'` must never choke on a banner.
+
+### 13.2 The three formats
+
+| `--format`       | Shape                                            | Amounts                                          |
+| ---------------- | ------------------------------------------------ | ------------------------------------------------ |
+| `json` (default) | the machine-plane envelope, pretty-printed       | **raw integer cents, always**                    |
+| `table`          | `cli-table3`-style box, headers, aligned columns | decimal, 2 dp, thousands separators              |
+| `csv`            | RFC 4180, header row, `\n` line endings          | decimal, 2 dp, no separators, no currency symbol |
+
+Format conversion happens in **one** function. A second place that turns cents into dollars is a
+second place they can be turned into dollars wrongly.
+
+### 13.3 Money — integer cents, everywhere, always (LOCKED)
+
+> **An amount is a signed integer number of cents. It is never a float, in any variable, in any
+> field, in any intermediate value, at any point in this program.**
+
+`-12350` is `-$123.50`. This is Actual's own convention and it is not negotiable here, because the
+alternative is a rounding error that shows up as a budget that does not balance by three cents and
+costs a day to find. The CLI parses cents, sends cents, stores cents in every staging CSV
+(`amount_cents`), and converts to a decimal **string** only in the renderer, only for display, and
+never back.
+
+A flag that takes an amount takes cents. `--amount 50000` is $500.00. The help text says so on every
+such flag, and a value containing `.` is rejected with a message that shows the integer the operator
+probably meant.
+
+---
+
+## 14. Exit codes
+
+Scripts branch on these, so they are part of the contract.
+
+| Code | Meaning                                                                                                                                                                    |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | it worked — including "zero results", which is a valid answer, noted on stderr                                                                                             |
+| `1`  | it ran and failed — a `doctor` check failed, an extraction yielded nothing, an apply partially failed                                                                      |
+| `2`  | usage, or a local refusal before any call: unknown verb, missing argument, no machine key (R6), credentials file too permissive, `--write` without the server's write tier |
+| `3`  | **not found** — no such account, no statement for that month, no budget loaded. A fact, not an error                                                                       |
+| `4`  | **conflict** — a §10.4 rule-3 statement conflict, or an apply whose recomputed plan differs from the one shown                                                             |
+| `5`  | the app could not be brought up (§3.3), or the machine plane could not be reached                                                                                          |
+| `6`  | authentication failed — a `401` from a server that IS reachable. Distinct from `2`, which is "we never sent anything"                                                      |
+| `69` | the binary is not built (`EX_UNAVAILABLE`, from the `cli/abx` shim when self-build also fails)                                                                             |
+
+Exit `3` is the one worth care. "There is no statement for 2023-04" is a **fact**, and giving it its
+own code is what lets `abx statements missing || echo all-present` be written. Exit `4` is the other:
+a conflict is a question for a human, not a failure of the program.
+
+---
+
+## 15. Logging, and what a failure leaves behind
+
+Following the platform convention in `~/BGit/CLAUDE.md`, and the state root the root `justfile`
+already uses:
+
+- **`~/T/_actual_budget/cli.info`** — INFO and `API_CALL` lines: verb, resolved target, route,
+  duration, outcome, row counts. **File only. Never stdout.**
+- **`~/T/_actual_budget/cli.err`** — WARN and ERROR lines, **and** stderr.
+- `~/T/_actual_budget/server.log` and `dev.log` — the app's own, written by bring-up and by `just`.
+
+Rules:
+
+- The machine key is never in either file. Only its fingerprint (R2).
+- **No financial data in the logs.** A count of rows, yes. A payee, an amount, an account number: no.
+  A log file is the least-protected copy of anything it holds.
+- **Logging can never crash the CLI.** Every filesystem fault in the logger is swallowed. A tool that
+  dies because it could not write a log line is a tool that dies for no reason.
+- Files are append-only and size-bounded by rotation at 8 MB, five generations. Never `/tmp`.
+- An uncaught exception is caught at top level, logged with its stack to `cli.err`, printed as one
+  sentence plus the remediation to stderr, and exits `1`. The CLI never dies with an unhandled
+  rejection.
+
+---
+
+## 16. Security
+
+What the CLI holds, and what it refuses to do with it.
+
+- **It holds one secret: the machine key**, and it reads it rather than being handed it, so `abx`
+  works on the machine it belongs to and nowhere else (§4.6).
+- **It never holds a human credential** — no server password, no session token, no encryption
+  password (§1.3, R10).
+- **It never sends the key to a non-loopback, non-`https:` URL** (R3), and the server never answers
+  the machine plane off loopback (§4.4 gate 1).
+- **The server is the gate, not the client.** Every check the CLI makes before a call — the
+  extension check on a statement path, the read-only check on a query — exists to produce a better
+  message before the round trip. Each is **repeated server-side**. A client-side check the server
+  does not repeat is a hole.
+- **Path containment.** Every statements path the CLI sends is resolved to an absolute real path
+  (symlinks followed) and must be **inside the configured root**. The server re-resolves and
+  re-checks. `--path ../../.ssh` is refused twice.
+- **Nothing it prints is a claim about a person.** A payee is a string a bank wrote on a statement.
+- **Prompt-injection posture.** A statement PDF is untrusted input. Extracted text is **data**: it is
+  parsed into typed fields, never evaluated, never used to build a shell command, and never
+  interpolated into a query. The one place extracted text reaches a model is the `_claude.txt`
+  sidecar, which is produced outside this pipeline and consumed here as plain text like any other
+  source.
+
+---
+
+## 17. Open-source safety (LOCKED)
+
+This repo is going public. Three rules follow, and each has a test behind it (§18).
+
+1. **No secret in the tree.** There is no config key anywhere in `cli/` that can hold a key,
+   password or token. The machine key lives in `~/.credentials/`, generated per machine.
+   A test greps the built `cli/code/dist/` for 32-plus-character hex literals and fails on a hit.
+2. **No private path in the code.** The statements root, the budget id, the entity names, the account
+   last-fours — **all configuration, none constants**. A test greps the source for
+   `/Users/`, `Bryan_Arindom`, and the entity names used on this machine, and fails on a hit outside
+   a test fixture or a documentation comment. The example paths in _this spec_ are illustrations of a
+   configured value; they are not defaults in code.
+3. **No financial data in the repo.** `{ROOT}/import/` is outside the repo by construction, and gets
+   its own `.gitignore` anyway (§10.7). Test fixtures use synthetic statements with invented banks
+   and invented amounts, committed deliberately.
+
+The PR and commit rules for this repo apply to every change here — `[AI]` prefix on commits and PR
+titles, the PR template left blank, no GitHub issues created by an agent. See
+[.github/agents/pr-and-commit-rules.md](../.github/agents/pr-and-commit-rules.md).
+
+---
+
+## 18. Testing
+
+| Layer                    | What it holds                                                                                                                                                                                                                                                                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Unit (vitest)**        | the argument parser including the `takesValue` warning; the cents/decimal renderer in both directions; `mintImportedId()` against a frozen fixture vector; `assignOrdinals()` on the two-coffees case; the statement ranking rules, each with its own case; the credentials merge (existing unrelated keys survive)                 |
+| **Golden fixtures**      | a synthetic statements tree under `cli/code/test/fixtures/statements/` — three entities, two banks, a duplicated month with identical bytes, a duplicated month with different bytes, a conflict pair, an unreadable PDF, and a month containing two identical same-day amounts. Every de-dupe rule has a fixture that exercises it |
+| **Determinism test**     | run the whole pipeline twice over the fixture tree; `_rows.csv` must be **byte-identical**, and the second `apply` must report `added: 0`                                                                                                                                                                                           |
+| **Integration**          | a real sync server on an ephemeral port with a temp state dir and a temp credentials file; the full loopback + key + mode + input gate ladder, including the `404`-off-loopback assertion                                                                                                                                           |
+| **Auth negatives**       | no key → 401 constant body; wrong key → the same body, byte for byte; loose file mode → refusal; non-loopback → 404                                                                                                                                                                                                                 |
+| **stdout purity canary** | greps the **built** `cli/code/dist/` for `console.log(` and `process.stdout.write(` outside the single sanctioned renderer module — grepping the output, not the source, because it catches a violation bundled in from a dependency                                                                                                |
+| **Open-source canaries** | the three §17 greps                                                                                                                                                                                                                                                                                                                 |
+| **Smoke**                | `abx`, `abx doctor`, `abx --help` each exit as specified with the server both up and down                                                                                                                                                                                                                                           |
+
+---
+
+## 19. Use cases
+
+**UC-1 — First run on a fresh clone.** Operator clones the repo, runs `just build`, adds `cli/` to
+`PATH`, types `abx`. The CLI finds no key, mints one, finds no server, says so without starting it,
+and prints the orientation report with `abx up` as the next step. **No secret was typed.**
+
+**UC-2 — "What's my checking balance?"** `abx accounts list --format table`. Server is down; the CLI
+brings it up with a spinner, waits for health, then prints the table. Total elapsed 40 s, of which 38
+were the server, and at no point did it look hung.
+
+**UC-3 — Ten years of PDFs, first import.** `abx statements scan` shows 412 PDFs, 7 missing months, 3
+duplicate scans. `abx statements extract` produces rows for 409 of them and names the 3 that yielded
+nothing. `abx statements dupes` shows two identical-byte pairs collapsed and one genuine conflict.
+The operator resolves the conflict with `--prefer`, runs `plan`, sees 1,871 rows of which 1,871 are
+new, and runs `apply --write --yes`. Actual reports `added: 1871`.
+
+**UC-4 — The next month.** The same three commands. `plan` reports 38 new rows and 1,871 already
+present, matched on `imported_id`. `apply` adds 38. **This is the case the whole `imported_id` design
+exists for.**
+
+**UC-5 — The same month arrives again in a new PDF.** A bank re-issues January with a corrected
+description. Layer one ranks it `primary` over the old scan (more rows). Layer two mints the same ids
+for the unchanged rows and a new id for the corrected one. `plan` reports 1 new row, not 94.
+
+**UC-6 — Two coffees.** A statement shows two `$5.00 BLUE BOTTLE` rows on the same day. Ordinals `0`
+and `1` give them different ids. Both import. Re-running imports neither again.
+
+**UC-7 — A 401 after a rotation.** Operator rotates the key but does not restart the server.
+`abx accounts list` gets a 401 from a reachable server, exits `6`, and says _"the server is holding
+an older key — restart it: `abx stop && abx up`."_ Exit `6` is distinct from `2` precisely so this
+case is not confused with "no key on disk."
+
+**UC-8 — A foreign process on 3001.** `abx up` finds a pid it did not start holding the port, refuses
+to continue, names the pid and the process, and exits `5`. It does not kill it.
+
+**UC-9 — Scripting a monthly reconcile.** A cron entry runs
+`abx statements extract && abx statements apply --map ~/…/map.yaml --write --yes --quiet`, with
+stdout to a file and a non-zero exit paging the operator. No spinner is drawn, because stderr is not
+a TTY.
+
+**UC-10 — An agent asks the same question.** Claude Code does not shell out to `abx`; it uses the
+MCP server, which reads the same key and calls the same routes. The answers are identical because the
+engine is ([mcp.mdx](./mcp.mdx) §2).
+
+---
+
+## 20. Acceptance criteria
+
+1. `abx` with no arguments prints the orientation report and exits `0` on a machine where nothing is
+   running and no key exists.
+2. A fresh machine needs **zero typed secrets**: the first `abx` invocation mints the key at `0600`
+   and every later call authenticates.
+3. Killing the server and running `abx accounts list` brings the server up, waits on `/health`, and
+   prints the accounts — with a spinner on a TTY and none when piped.
+4. `abx accounts list --format json | jq .` succeeds with the server both freshly started and warm;
+   stdout contains no banner, spinner residue, or log line in either case.
+5. A request to `/machine/v1/ping` from a non-loopback address returns `404`. With a wrong key from
+   loopback it returns `401` with a body byte-identical to the no-key case.
+6. `chmod 644 ~/.credentials/actual_budget.json` makes both the CLI and the server refuse, each
+   naming the `chmod 600` fix.
+7. Running the full statements pipeline twice over the fixture tree produces a byte-identical
+   `_rows.csv`, and the second `apply` reports `added: 0`.
+8. The fixture tree's two identical same-day `$5.00` rows both import, and neither is re-imported on
+   the second run.
+9. A duplicated month with identical bytes collapses to one `primary`; a duplicated month with
+   differing rows is reported as a `conflict` and **blocks** `apply` for that account only.
+10. No path under the statements root outside `import/` is modified by any verb — asserted by
+    comparing a recursive hash of the tree before and after a full run.
+11. `grep -rn "console.log(" cli/code/dist/` returns nothing outside the sanctioned renderer.
+12. The three §17 open-source canaries pass on a clean checkout.
+13. `yarn typecheck` and `yarn lint` pass with `cli/` included; `just build` leaves `cli/dist/`
+    newer than every source file under `cli/code/src/`.
+14. `abx` never appears in `packages/`; `packages/cli` is unmodified by any change made under this
+    spec.
+
+---
+
+## 21. Build phases
+
+| Phase                          | Ships                                                                                                  | Done when                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| **P1 — the spine**             | `cli/` layout, shims, argument parser, logger, progress, `--format`, exit codes, `abx help`            | `abx --help` works from any directory; unit tests green |
+| **P2 — the key**               | `credentials.ts` both sides, the machine-plane middleware, `/machine/v1/ping`, `abx key`, `abx doctor` | AC 2, 5, 6                                              |
+| **P3 — bring-up**              | `bringup.ts`, `abx up/stop/status/logs`, bare `abx`                                                    | AC 1, 3                                                 |
+| **P4 — the read verbs**        | the read routes and their CLI verbs                                                                    | AC 4                                                    |
+| **P5 — statements, read-only** | `scan`, `missing`, `extract`, `dupes`, both de-dupe layers, the staging directory                      | AC 7, 8, 9, 10                                          |
+| **P6 — statements, write**     | `plan`, `apply`, the write tier, `--max-changes`                                                       | UC-3, UC-4, UC-5                                        |
+| **P7 — the write verbs**       | `transactions add`, `budget set-amount`, `sync`                                                        | —                                                       |
+| **P8 — hardening**             | every canary, the determinism test, the open-source greps                                              | AC 11, 12, 13, 14                                       |
+
+P1–P3 are the ones that must be right; everything after them is a verb on a working spine.
+
+---
+
+## 22. Invariants recap (LOCKED)
+
+1. `abx` is **not** `@actual-app/cli`. It never forks it, wraps it, reads its data directory, or
+   accepts its credentials, and it lives outside `packages/` so upstream merges cannot touch it.
+2. CLI code lives only in `cli/` — entry at the top, implementation under `cli/code/`. `pm/` holds
+   no code.
+3. Root `just build` and `just run` always build the CLI, and the shim self-builds as a backstop.
+4. If the app is down, the CLI brings it up and gates on **`:5006/health`**, never on `:3001`.
+5. The machine key is 256 CSPRNG bits, minted by whichever side needs it first, atomically merged
+   into `~/.credentials/actual_budget.json` at `0600`, sent as `X-Actual-Machine-Key`, compared in
+   constant time, and **never logged, echoed, or sent off loopback**.
+6. The machine plane 404s off loopback and 401s with a constant body on a bad key; with no key
+   configured server-side it is not mounted at all.
+7. The CLI computes no budget answer. One engine powers browser, CLI and MCP.
+8. Money is integer cents in every variable and every field; decimals exist only in the renderer.
+9. De-duplication has two layers — statements by `(entity, bank, account, period)` with
+   deterministic ranking, rows by a deterministic `imported_id` that includes an `ordinal` so two
+   identical same-day transactions survive — and **Actual's `importTransactions` remains the sole
+   authority on what already exists in the ledger**.
+10. Nothing outside `{ROOT}/import/` is ever written under the statements root, and the staging
+    directory is rebuildable from source at any time.
+11. stdout carries exactly one payload; the spinner, progress and every diagnostic go to stderr, and
+    progress is erased before real output, including on failure.
+12. Writes need `--write` **and** the server's write tier; `plan` is recomputed at apply time and a
+    changed plan re-asks.
+13. No secret, no private path, and no financial data ever lands in this repo.
+
+---
+
+## 23. Related specs
+
+- [mcp.mdx](./mcp.mdx) — the MCP server. Same key, same machine plane, same engine; a different
+  caller with a different threat model.
+- [../AGENTS.md](../AGENTS.md) — the monorepo's own rules: yarn from the root, typecheck before
+  committing, the i18n and `FinancialText` conventions.
+- [../.github/agents/pr-and-commit-rules.md](../.github/agents/pr-and-commit-rules.md) — `[AI]`
+  prefix, the blank PR template, no agent-created issues.
+- [../CLAUDE.md](../CLAUDE.md) — where the statements live on this machine, and the open-source rule
+  this spec's §17 implements.
+- `packages/cli/README.md` — the upstream CLI. Read it before adding any verb to `abx`, to be sure
+  the verb is not already somebody else's.
