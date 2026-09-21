@@ -694,14 +694,19 @@ One read route returns the machine-readable route table of _this build_:
         "methods": ["GET", "POST"],
         "tier": { "GET": "read", "POST": "write" },
         "status": { "GET": "live", "POST": "live" },
-        "summary": { "GET": "Accounts, with balances.", "POST": "Create an account." },
+        "summary": {
+          "GET": "Accounts, with balances.",
+          "POST": "Create an account.",
+        },
       },
       {
         "path": "/sync",
         "methods": ["POST"],
         "tier": { "POST": "write" },
         "status": { "POST": "planned" },
-        "summary": { "POST": "Sync with the sync server. NOT IMPLEMENTED YET (phase P3)." },
+        "summary": {
+          "POST": "Sync with the sync server. NOT IMPLEMENTED YET (phase P3).",
+        },
       },
     ],
     "limits": {
@@ -1856,19 +1861,19 @@ The plane is done when all of these hold:
 
 ## 21. Build phases
 
-| Phase   | Delivers                                                                                                                   | Depends on |
-| ------- | -------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| **P0**  | ✅ _done_ — mount, key, gates 1–3, envelope, `/ping`, fail-closed, the mount-order test                                    | —          |
-| **P1**  | `engine.ts` (the one `@actual-app/api` instance), `tier.ts`, `schema.ts`, `/whoami`, `/capabilities`, `/health`, `/schema` | P0         |
-| **P2**  | The read families: accounts, transactions, categories, budget months, reference data, `/query`                             | P1         |
-| **P3**  | `confirm.ts` and the write protocol; the first writes — transactions, budget amounts, `/sync`, `/undo`                     | P2         |
-| **P4**  | The ingest plane, `prepared` mode: manifest, scan, coverage, map, plan, apply, file import                                 | P3         |
-| **P5**  | Account provisioning (§12) and the map writer                                                                              | P4         |
-| **P6**  | The envelope operations (§8.5) — cover, transfer, copy, averages, holds, goal templates                                    | P3         |
-| **P7**  | The analytics plane (§10)                                                                                                  | P2         |
-| **P8**  | Rules, schedules, payees, tags, notes; `/rules/preview`; reconcile                                                         | P3         |
-| **P9**  | `raw` ingest mode (PDF extraction, both de-dupe layers, staging)                                                           | P4         |
-| **P10** | Admin tier, batch, NDJSON progress, the audit trail, the full canary suite                                                 | P3         |
+| Phase   | Delivers                                                                                                                                                                                     | Depends on |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **P0**  | ✅ _done_ — mount, key, gates 1–3, envelope, `/ping`, fail-closed, the mount-order test                                                                                                      | —          |
+| **P1**  | ✅ _done_ — `engine.ts` (the one `@actual-app/api` instance: dynamic-imported, lazy), `tier.ts`, `validate.ts`, `route.ts` (the one array), `/whoami`, `/capabilities`, `/health` (+`probe`) | P0         |
+| **P2**  | The read families: accounts, transactions, categories, budget months, reference data, `/query` **and `/schema`** (moved here from P1 — §8.0)                                                 | P1         |
+| **P3**  | `confirm.ts` and the write protocol; the first writes — transactions, budget amounts, `/sync`, `/undo`                                                                                       | P2         |
+| **P4**  | The ingest plane, `prepared` mode: manifest, scan, coverage, map, plan, apply, file import                                                                                                   | P3         |
+| **P5**  | Account provisioning (§12) and the map writer                                                                                                                                                | P4         |
+| **P6**  | The envelope operations (§8.5) — cover, transfer, copy, averages, holds, goal templates                                                                                                      | P3         |
+| **P7**  | The analytics plane (§10)                                                                                                                                                                    | P2         |
+| **P8**  | Rules, schedules, payees, tags, notes; `/rules/preview`; reconcile                                                                                                                           | P3         |
+| **P9**  | `raw` ingest mode (PDF extraction, both de-dupe layers, staging)                                                                                                                             | P4         |
+| **P10** | Admin tier, batch, NDJSON progress, the audit trail, the full canary suite                                                                                                                   | P3         |
 
 P2 and P7 are what make the MCP genuinely useful; P4 and P5 are what make the _first evening_ useful.
 Build in that order and the thing is valuable before it is complete.

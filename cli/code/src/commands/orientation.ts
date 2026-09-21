@@ -491,7 +491,10 @@ export const whoami: Verb = {
       { field: 'target', value: d.target },
       { field: 'server', value: d.serverVersion },
       { field: 'key', value: d.keyFingerprint },
-      { field: 'budget', value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)' },
+      {
+        field: 'budget',
+        value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)',
+      },
       { field: 'engine', value: d.engine.status },
       { field: 'data dir', value: d.engine.dataDir },
       { field: 'write tier', value: d.tiers.write ? 'ENABLED' : 'off' },
@@ -530,12 +533,11 @@ export const capabilities: Verb = {
   name: 'capabilities',
   summary: 'the route table, tiers and limits of this server build',
   async run(ctx): Promise<number> {
-    const envelope = await call(
-      ctx.target,
-      ctx.requireKey(),
-      '/capabilities',
-      { timeoutMs: 10_000, logger: ctx.logger, verb: 'capabilities' },
-    );
+    const envelope = await call(ctx.target, ctx.requireKey(), '/capabilities', {
+      timeoutMs: 10_000,
+      logger: ctx.logger,
+      verb: 'capabilities',
+    });
 
     const d = (envelope as { data: CapabilitiesData }).data;
     const rows: Row[] = d.routes.flatMap(r =>
@@ -609,7 +611,10 @@ export const health: Verb = {
     const rows: Row[] = [
       { field: 'healthy', value: d.healthy ? 'yes' : 'NO' },
       { field: 'engine', value: d.engine.status },
-      { field: 'budget', value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)' },
+      {
+        field: 'budget',
+        value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)',
+      },
       { field: 'known budgets', value: String(d.knownBudgets.length) },
       ...(d.hint ? [{ field: 'next step', value: d.hint }] : []),
     ];
