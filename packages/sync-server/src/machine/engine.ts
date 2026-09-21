@@ -44,6 +44,7 @@ import path from 'node:path';
 import { errorFileFor } from '@actual-app/error-file';
 
 import { MachineError } from './envelope.js';
+import { engineSession } from './session.js';
 
 const errors = errorFileFor('sync-server/src/machine/engine.ts');
 
@@ -65,6 +66,7 @@ type EngineApi = {
     dataDir?: string;
     serverURL?: string;
     password?: string;
+    sessionToken?: string;
   }) => Promise<EngineLib>;
   shutdown: () => Promise<void>;
   getBudgets: () => Promise<
@@ -90,6 +92,12 @@ export type EngineState = {
   /** The budget currently open, or null. A ready engine with no budget is normal. */
   budget: { id: string; name: string } | null;
   dataDir: string;
+  /**
+   * The sync server this engine syncs through — the one it is mounted in.
+   * `connected` false means the server is not bootstrapped yet, so the engine
+   * is local-only and nothing it does reaches the browser.
+   */
+  server: { url: string | null; connected: boolean };
   /** Present only when status is 'failed' or 'unavailable'. Never a stack. */
   error?: string;
   /** Always a remediation (§2 R6). */
@@ -102,6 +110,10 @@ let status: EngineStatus = 'idle';
 let failure: { error: string; hint: string } | null = null;
 let openBudget: { id: string; name: string } | null = null;
 let starting: Promise<EngineLib> | null = null;
+let server: { url: string | null; connected: boolean } = {
+  url: null,
+  connected: false,
+};
 
 /**
  * Where the engine keeps its budget directories.
@@ -123,6 +135,7 @@ export function engineState(env: NodeJS.ProcessEnv = process.env): EngineState {
     status,
     budget: openBudget,
     dataDir: engineDataDir(env),
+    server,
     ...(failure ?? {}),
   };
 }
@@ -173,9 +186,20 @@ async function start(env: NodeJS.ProcessEnv): Promise<EngineLib> {
   api = loaded;
 
   const dataDir = engineDataDir(env);
+  // Join the sync server this process IS, so the browser sees what the
+  // engine writes (session.ts). A server nobody has bootstrapped has no
+  // owner to be, and the engine starts local-only and says so.
+  const session = env.ACTUAL_MACHINE_LOCAL_ONLY === '1' ? null : engineSession(env);
+  server = {
+    url: session?.serverURL ?? null,
+    connected: session !== null,
+  };
   try {
     fs.mkdirSync(dataDir, { recursive: true });
-    lib = await api.init({ dataDir });
+    lib = await api.init({
+      dataDir,
+      ...(session === null ? {} : session),
+    });
   } catch (err) {
     errors.caught('starting the budget engine', err);
     status = 'failed';
@@ -260,20 +284,81 @@ async function loadApi(): Promise<EngineApi | ApiLoadFailure> {
  * available on this plane (mcp.mdx §3), so the engine stays ready-with-no-
  * budget and every route that needs one says which ids exist.
  */
+type RemoteFile = {
+  fileId: string;
+  groupId: string;
+  name: string;
+  deleted: boolean;
+};
+
+/** The budgets this engine can reach: local directories plus the server's files. */
+export type KnownBudget = {
+  id: string;
+  name: string;
+  /** `local` is on disk here; `remote` is on the sync server and not yet downloaded; `both` is synced. */
+  where: 'local' | 'remote' | 'both';
+  cloudFileId?: string;
+};
+
+async function listKnownBudgets(): Promise<KnownBudget[]> {
+  if (api === null || lib === null) {
+    return [];
+  }
+  const local = await api.getBudgets();
+  const out: KnownBudget[] = local
+    .filter(b => (b.id ?? b.cloudFileId) !== undefined)
+    .map(b => ({
+      id: (b.id ?? b.cloudFileId) as string,
+      name: b.name,
+      where: 'local' as const,
+      ...(b.cloudFileId ? { cloudFileId: b.cloudFileId } : {}),
+    }));
+
+  if (!server.connected) {
+    return out;
+  }
+
+  let remote: RemoteFile[] | null = null;
+  try {
+    remote = (await lib.send('get-remote-files')) as RemoteFile[] | null;
+  } catch (err) {
+    errors.caught('listing the sync server files', err);
+  }
+  for (const file of remote ?? []) {
+    if (file.deleted) {
+      continue;
+    }
+    const synced = out.find(b => b.cloudFileId === file.fileId);
+    if (synced) {
+      synced.where = 'both';
+    } else {
+      out.push({
+        id: file.fileId,
+        name: file.name,
+        where: 'remote',
+        cloudFileId: file.fileId,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Open the budget named by `ACTUAL_MACHINE_BUDGET_ID`, or the only one there
+ * is — downloading it from the sync server first when it only exists there.
+ *
+ * "The only one there is" is a convenience with a hard edge: with two or more
+ * budgets and no configured id, NOTHING is opened. Guessing which of an
+ * operator's budgets to answer questions about is the single worst mistake
+ * available on this plane (mcp.mdx §3), so the engine stays ready-with-no-
+ * budget and every route that needs one says which ids exist.
+ */
 async function openConfiguredBudget(env: NodeJS.ProcessEnv): Promise<void> {
   if (api === null) {
     return;
   }
 
-  let budgets: Array<{ id?: string; cloudFileId?: string; name: string }>;
-  try {
-    budgets = await api.getBudgets();
-  } catch (err) {
-    errors.caught('listing the budgets known to the engine', err);
-    openBudget = null;
-    return;
-  }
-
+  const budgets = await listKnownBudgets();
   const wanted = env.ACTUAL_MACHINE_BUDGET_ID;
   const chosen = wanted
     ? budgets.find(b => b.id === wanted || b.cloudFileId === wanted)
@@ -286,33 +371,56 @@ async function openConfiguredBudget(env: NodeJS.ProcessEnv): Promise<void> {
     return;
   }
 
-  const id = chosen.id ?? chosen.cloudFileId;
-  if (id === undefined) {
-    openBudget = null;
-    return;
+  await openKnownBudget(chosen);
+}
+
+/**
+ * Open one known budget, downloading it first if it is remote-only.
+ * Throws a MachineError the route can send as-is.
+ */
+export async function openKnownBudget(chosen: KnownBudget): Promise<void> {
+  if (api === null || lib === null) {
+    throw new MachineError('not_ready', 'The engine is not running.');
+  }
+
+  let localId = chosen.id;
+  if (chosen.where === 'remote') {
+    const result = (await lib.send('download-budget', {
+      cloudFileId: chosen.cloudFileId ?? chosen.id,
+    })) as { id?: string; error?: { reason: string } };
+    if (result.error || !result.id) {
+      throw new MachineError(
+        'upstream_error',
+        `The sync server would not hand over budget "${chosen.name}" (${result.error?.reason ?? 'no id'}).`,
+        'check the sync server log, then retry',
+      );
+    }
+    localId = result.id;
   }
 
   try {
-    await api.loadBudget(id);
-    openBudget = { id, name: chosen.name };
+    await api.loadBudget(localId);
+    openBudget = { id: localId, name: chosen.name };
   } catch (err) {
-    errors.caught('opening the configured budget', err, { budgetId: id });
+    errors.caught('opening the budget', err, { budgetId: localId });
     openBudget = null;
+    throw new MachineError(
+      'upstream_error',
+      `Budget "${chosen.name}" could not be opened.`,
+      'read ~/T/actual_budget/error.err',
+    );
   }
 }
 
-/** The budget ids this install knows, for an error that has to name them. */
-export async function knownBudgets(): Promise<
-  Array<{ id: string; name: string }>
-> {
-  if (api === null) {
-    return [];
-  }
+/** Record that a route (create, load) opened a budget. */
+export function markBudgetOpen(id: string, name: string): void {
+  openBudget = { id, name };
+}
+
+/** The budgets this install knows — local and on the sync server — for an error that has to name them. */
+export async function knownBudgets(): Promise<KnownBudget[]> {
   try {
-    const budgets = await api.getBudgets();
-    return budgets
-      .map(b => ({ id: b.id ?? b.cloudFileId ?? '', name: b.name }))
-      .filter(b => b.id !== '');
+    return await listKnownBudgets();
   } catch (err) {
     errors.caught('listing the known budgets', err);
     return [];
@@ -363,6 +471,7 @@ export function resetEngineForTests(): void {
   failure = null;
   openBudget = null;
   starting = null;
+  server = { url: null, connected: false };
 }
 
 /** Test seam: stand in for `@actual-app/api` without installing it. */
