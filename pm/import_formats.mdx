@@ -1,0 +1,689 @@
+---
+title: Actual Budget — the import file formats
+description: >
+  What a file has to look like for THIS install of Actual Budget to import it, read straight out of
+  the importer's source rather than from the manual. Actual accepts five file shapes — OFX/QFX, CSV
+  (and TSV), QIF, CAMT.053 XML — plus a sixth, JSON over the API, which is what the MCP server and
+  the CLI use. They are not equal. Only OFX and CAMT carry a transaction id (imported_id) through to
+  the ledger; CSV throws away every column it does not map and QIF has no id at all, so a re-import
+  of either can only de-duplicate by fuzzy date-and-amount matching. That single fact decides what a
+  statement pipeline should generate: OFX for the import, CSV beside it for humans. This spec
+  documents each format's exact parse (which tags and columns are read, how amounts and dates are
+  interpreted, what is silently ignored, what throws), the JSON transaction contract behind all of
+  them, the three-pass de-duplication that decides added-versus-updated, the account model an
+  importer has to provision into, and the conventions our own statement pipeline follows when it
+  writes files for this app: one tree per institution, year, month and statement type, every file
+  suffixed _actual before its extension, every OFX validated by Actual's own parser before it is
+  called done.
+---
+
+# Actual Budget — the import file formats
+
+`~/BGit/Bryan_git/actual_budget_bryan/pm/import_formats.mdx` · the contract for every file (and
+every JSON body) that puts transactions into a budget.
+
+---
+
+## Table of Contents
+
+- [Introduction](#introduction)
+- [1. The six ways a transaction gets in](#1-the-six-ways-a-transaction-gets-in)
+- [2. The one contract underneath: the import transaction](#2-the-one-contract-underneath-the-import-transaction)
+- [3. OFX and QFX — the format to generate](#3-ofx-and-qfx--the-format-to-generate)
+- [4. CSV and TSV — the format people reach for first](#4-csv-and-tsv--the-format-people-reach-for-first)
+- [5. QIF](#5-qif)
+- [6. CAMT.053 XML](#6-camt053-xml)
+- [7. JSON over the API — what the MCP and CLI send](#7-json-over-the-api--what-the-mcp-and-cli-send)
+- [8. De-duplication — how "already there" is decided](#8-de-duplication--how-already-there-is-decided)
+- [9. Accounts — what the file lands in](#9-accounts--what-the-file-lands-in)
+- [10. Money and dates](#10-money-and-dates)
+- [11. What our pipeline generates](#11-what-our-pipeline-generates)
+- [12. Validation before a file is called done](#12-validation-before-a-file-is-called-done)
+- [13. Known defects in the upstream importer](#13-known-defects-in-the-upstream-importer)
+- [14. Acceptance criteria](#14-acceptance-criteria)
+- [15. Related specs](#15-related-specs)
+
+---
+
+## Introduction
+
+Actual Budget has one importer and several front doors to it. A person picks a file in the web UI;
+a program hands JSON to `@actual-app/api`; the machine plane behind the MCP and CLI does the same
+thing from a route. Every door ends in the same function, `reconcileTransactions`, which decides
+per row whether it is new, an update to something already in the ledger, or a duplicate to skip.
+
+That decision is only as good as the identity each row carries in. This spec exists because the
+obvious choice — write a CSV — produces rows with **no identity at all**, and the failure that
+follows is silent: the first import looks perfect, the second one duplicates or mis-merges, and
+nobody notices until the ledger is wrong in a way that cannot be undone by hand. So the document
+does two jobs. It records exactly what the app does with each format, with the file and function
+that does it, and it fixes what our own pipeline writes so that a re-run is idempotent.
+
+Everything here was read from the code, not the docs. Where the two disagree, the code wins and the
+disagreement is noted.
+
+---
+
+## 1. The six ways a transaction gets in
+
+| Door                  | Format         | Carries an id?         | Who uses it                                |
+| --------------------- | -------------- | ---------------------- | ------------------------------------------ |
+| Web UI → Import       | `.ofx` `.qfx`  | ✅ `FITID`             | a person, once per statement download      |
+| Web UI → Import       | `.csv` `.tsv`  | ❌ **dropped**         | a person, with a column-mapping dialog     |
+| Web UI → Import       | `.qif`         | ❌ none in the format  | a person, legacy exports                   |
+| Web UI → Import       | `.xml` (CAMT)  | ✅ `AcctSvcrRef`       | a person, European banks                   |
+| `@actual-app/api`     | JSON           | ✅ `imported_id` field | the machine plane, the MCP, the CLI        |
+| Bank sync             | provider JSON  | ✅ provider id         | GoCardless / SimpleFIN / Pluggy — not ours |
+
+The file door and the API door converge: the UI parses a file into JSON rows and then calls the same
+`transactions-import` handler the API calls.
+
+File parsing is dispatched on the lower-cased extension, and anything else answers
+`Invalid file type`; done in `parseFile()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/transactions/import/parse-file.ts`.
+
+The UI's file picker is limited to the same list — `qif ofx qfx csv tsv xml` — in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx`.
+
+---
+
+## 2. The one contract underneath: the import transaction
+
+Every door produces rows of this shape before the ledger sees them. It is the type the API is
+documented against, and the machine plane's `/transactions/import` body is a list of exactly these.
+
+| Field             | Type            | Required | Meaning                                                                                                                                     |
+| ----------------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `date`            | `YYYY-MM-DD`    | ✅       | Missing date throws `date is required when adding a transaction` before anything is written                                                 |
+| `amount`          | integer cents   | —        | `12030` is $120.30. **Negative is an outflow.** A non-integer is refused for the whole batch with `Amount is invalid, must be an integer`    |
+| `payee_name`      | string          | —        | Creates the payee if new. Normalised to title case by default (`payeeNameNormalization: 'original'` keeps it as written)                     |
+| `payee`           | payee id        | —        | Overrides `payee_name` when both are given                                                                                                  |
+| `imported_payee`  | string          | —        | The raw bank description. Defaults to `payee_name` when absent. Never normalised, only trimmed                                              |
+| `imported_id`     | string          | —        | **The dedupe key.** See §8. Absent means "match fuzzily"                                                                                    |
+| `notes`           | string          | —        | The operator's field; on an update the existing note wins (§8.4)                                                                            |
+| `category`        | category **id** | —        | Not a name. An unknown or absent value is stored as `null` and the rules engine may fill it                                                 |
+| `cleared`         | boolean         | —        | Defaults to the call's `defaultCleared`, which defaults to `true`                                                                            |
+| `transfer_id`     | transaction id  | —        | Only when importing a transfer's other leg; leave alone otherwise                                                                            |
+| `subtransactions` | `[{amount…}]`   | —        | A split. Child amounts should sum to `amount`; the app flags a mismatch but does not refuse it                                               |
+| `account`         | account id      | —        | **Ignored on input** — overwritten with the account the call targets                                                                         |
+
+Defined as `ImportTransactionEntity` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/types/models/import-transaction.ts`.
+
+The validation and normalisation of these fields (integer check, payee trimming and title-casing,
+`imported_payee` fallback, payee resolution) happens in `normalizeTransactions()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/accounts/sync.ts`.
+
+Two things are true of every door and worth stating once:
+
+- **The rules engine runs on import.** Each row goes through `runRules()` before matching, so a
+  payee rule that assigns a category applies to imported rows exactly as it does to typed ones.
+- **`imported_payee` is the audit field.** It is the string the bank printed; `payee_name` is what
+  the row shows. Our pipeline always sets both, and never edits the former.
+
+---
+
+## 3. OFX and QFX — the format to generate
+
+OFX is the one file format whose rows arrive with an identity, which is why it is what our pipeline
+writes (§11). `.qfx` is Intuit's rename of the same thing and is parsed identically.
+
+### 3.1 The file, top to bottom
+
+```
+OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+SECURITY:NONE
+ENCODING:USASCII
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:NONE
+
+<OFX>
+<SIGNONMSGSRSV1><SONRS><STATUS><CODE>0<SEVERITY>INFO</STATUS>
+<DTSERVER>20260301000000<LANGUAGE>ENG</SONRS></SIGNONMSGSRSV1>
+<BANKMSGSRSV1><STMTTRNRS><TRNUID>0<STATUS><CODE>0<SEVERITY>INFO</STATUS>
+<STMTRS><CURDEF>USD
+<BANKACCTFROM><BANKID>000000000<ACCTID>6467<ACCTTYPE>CHECKING</BANKACCTFROM>
+<BANKTRANLIST><DTSTART>20260201<DTEND>20260228
+<STMTTRN>
+<TRNTYPE>DEBIT
+<DTPOSTED>20260203
+<TRNAMT>-45.20
+<FITID>6467-20260203-4520-0-9a1f3c77
+<NAME>Trader Joe's #142
+<MEMO>Card purchase 02/03
+</STMTTRN>
+</BANKTRANLIST>
+<LEDGERBAL><BALAMT>1234.56<DTASOF>20260228</LEDGERBAL>
+</STMTRS></STMTTRNRS></BANKMSGSRSV1>
+</OFX>
+```
+
+The parser splits the file in two at the first `<OFX>` (regex `/<OFX\s?>/`). Everything before it
+is the header, read as `KEY:VALUE` lines into a map and then **ignored** except for two keys used to
+pick the byte decoder: `ENCODING:UTF-8` decodes as UTF-8; `ENCODING:USASCII` with `CHARSET:8859-1`
+or `CHARSET:1252` decodes as Latin-1 or Windows-1252; anything else is UTF-8. Done in
+`decodeOfxBytes()` and `ofx2json()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/transactions/import/ofx2json.ts`.
+
+The body is parsed **as XML first**. If that throws — which every SGML-style OFX 1.x file does,
+because leaf tags have no closing tag — the body is rewritten by `sgml2Xml()` and parsed again. The
+rewrite: `&` → `&#038;`, whitespace between tags removed, dots inside tag names removed
+(`<INTU.BID>` becomes `<INTUBID>`), and a closing tag synthesised for every `<TAG>value` leaf. So both
+of these are valid input: the SGML shape above, and a fully closed OFX 2.x XML body with an
+`<?xml … ?>` prologue (the prologue lands in the header section and is harmlessly ignored).
+
+**Consequence for a generator:** write the SGML shape, no closing tags on leaves, closing tags on
+aggregates. Escape `&` as `&amp;` (both forms are normalised), and escape `<` as `&lt;` — a literal
+`<` inside `<NAME>` becomes a tag and swallows the rest of the record.
+
+### 3.2 Where the transactions are looked for
+
+Exactly three paths, chosen by which message set is present, checked in this order:
+
+| If the body contains   | Rows are read from                                                               | Statement kind |
+| ---------------------- | -------------------------------------------------------------------------------- | -------------- |
+| `CREDITCARDMSGSRSV1`   | `CCSTMTTRNRS → CCSTMTRS → BANKTRANLIST → STMTTRN`                                | credit card    |
+| else `INVSTMTMSGSRSV1` | `INVSTMTTRNRS → INVSTMTRS → INVTRANLIST → INVBANKTRAN → STMTTRN`                 | investment     |
+| else                   | `BANKMSGSRSV1 → STMTTRNRS → STMTRS → BANKTRANLIST → STMTTRN`                     | bank           |
+
+Multiple `STMTTRNRS` blocks in one file are flattened into one list. Done in `getStmtTrn()`,
+`getBankStmtTrn()`, `getCcStmtTrn()`, `getInvStmtTrn()` in `ofx2json.ts`.
+
+The investment path only reads the **cash** legs (`INVBANKTRAN`). `BUYSTOCK`, `SELLSTOCK`, `INCOME`,
+`REINVEST` and every other `INVTRANLIST` child are ignored — Actual has no securities ledger. See
+§13 for a crash in that path.
+
+### 3.3 What is read from each `STMTTRN`
+
+| OFX tag    | Becomes           | How                                                                                                                                                                                                                                 |
+| ---------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DTPOSTED` | `date`            | First 8 characters as `YYYYMMDD`, built as a **local** `Date`, then formatted `YYYY-MM-DD`. Time and the `[0:GMT]` zone suffix are discarded. Required.                                                                              |
+| `TRNAMT`   | `amount`          | `parseOfxAmount()`: `(30.00)` → `-30.00`; every character except digits, `.` and `-` is stripped; a second `.` is dropped. Unparseable → the row is kept with **amount 0** and an error is appended to the result. Then cents via `Math.round(x*100)`. |
+| `FITID`    | `imported_id`     | Verbatim. Absent → no id → fuzzy matching (§8).                                                                                                                                                                                       |
+| `NAME`     | `payee_name` and `imported_payee` | HTML entities decoded (`&amp;` `&lt;` `&gt;` `&quot;` `&#39;`).                                                                                                                                                       |
+| `MEMO`     | `notes`           | **Only if the "Import notes" option is on** in the UI; otherwise `null`. Also the fallback payee when `NAME` is empty and "fallback missing payee to memo" is on.                                                                     |
+| `TRNTYPE`  | —                 | Parsed into the intermediate object and then **unused**.                                                                                                                                                                             |
+
+Everything else — `CHECKNUM`, `REFNUM`, `SIC`, `PAYEE` aggregates, `BANKACCTTO`, `CURRENCY` — is
+ignored. At the statement level `CURDEF`, `ACCTID`, `DTSTART`/`DTEND`, `LEDGERBAL` and `AVAILBAL`
+are ignored too: **Actual never reads the printed balance from an OFX file** and never checks the
+file against the account it is being imported into. The operator picks the account; the file is
+trusted. Mapping done in `mapOfxTransaction()` in `ofx2json.ts` and `parseOFX()` in `parse-file.ts`.
+
+Two per-account UI switches affect OFX and are remembered in prefs keyed by account id:
+`ofx-fallback-missing-payee-{account}` and `ofx-swap-payee-memo-{account}` (swap `NAME` and `MEMO`
+for banks that put the merchant in the memo). Set in `onImport()` in `ImportTransactionsModal.tsx`.
+
+### 3.4 What a generated OFX must therefore satisfy
+
+- Header lines, blank line, `<OFX>`. The header values do not matter beyond `ENCODING`/`CHARSET`,
+  but `OFXHEADER:100 / DATA:OFXSGML / VERSION:102` is the shape every bank emits and the safest.
+- One statement block of the right message set: `BANKMSGSRSV1` for checking and savings,
+  `CREDITCARDMSGSRSV1` for a card. Do not use `INVSTMTMSGSRSV1` for brokerage cash (§13).
+- Every `STMTTRN` has `DTPOSTED` (8 digits), `TRNAMT` (plain decimal, `-` for outflow, no thousands
+  separator, no currency symbol), `FITID`, `NAME`.
+- `FITID` is **unique within the account and stable across runs** (§8.2, §11.4).
+- `NAME` ≤ 32 characters is the OFX spec limit; Actual does not enforce it and we do not truncate,
+  because the raw description is the audit field. `MEMO` carries anything that would not fit.
+- ASCII, or declare `ENCODING:UTF-8`.
+
+---
+
+## 4. CSV and TSV — the format people reach for first
+
+CSV is parsed into raw rows and then **mapped by the UI**. There is no fixed column set; a dialog
+asks which column is the date, the amount, the payee. This is the flexibility that makes CSV the
+natural first choice, and it is also the mechanism that discards the transaction id.
+
+### 4.1 The parse
+
+`csv-parse` with: `columns: hasHeaderRow` (a header row produces objects keyed by column name; no
+header produces arrays), `bom: true`, `delimiter` (`,` by default; `\t` when the extension is
+`.tsv`; changeable in the dialog), `quote: '"'`, `trim: true`, `relax_column_count: true` (ragged
+rows are accepted), `skip_empty_lines: true`. "Skip N lines at start / end" is applied before
+parsing, for banks that print a preamble or a totals footer. Done in `parseCSV()` in
+`parse-file.ts`.
+
+### 4.2 The mapping — and what it throws away
+
+The dialog holds exactly eight targets: `date`, `amount`, `payee`, `notes`, `inOut`, `category`,
+`outflow`, `inflow`. Applying the mapping builds a **new object containing only those eight keys**
+(plus preview bookkeeping). A column named `imported_id`, `id`, `FITID`, `Reference` — anything —
+that is not one of the eight is not carried; it is gone before the row reaches the server. Done in
+`applyFieldMappings()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/desktop-client/src/components/modals/ImportTransactionsModal/utils.ts`.
+
+The initial mapping is guessed from the **first row's** column names and values:
+
+| Target     | Rule                                                                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `date`     | first column whose name contains `date`; else the first value matching `^\d+[-/]\d+[-/]\d+$`                  |
+| `amount`   | first column whose name contains `amount`; else the first value matching `^-?[.,\d]+$`                        |
+| `category` | first column whose name contains `category`                                                                   |
+| `payee`    | first column whose name contains `payee`; else the first column that is none of the above                     |
+| `notes`    | first column whose name contains `notes`; else the next unclaimed column                                      |
+| `inOut`    | the next unclaimed column (harmless unless In/Out mode is switched on)                                        |
+
+Done in `getInitialMappings()` in `ImportTransactionsModal.tsx`. The mapping is saved per account
+(`csv-mappings-{account}`) and reused next time.
+
+**Consequence for a generator:** a header of exactly `Date,Payee,Notes,Category,Amount` auto-maps
+with nothing to click. Name the columns so the guess is right and there is no dialog to get wrong.
+
+### 4.3 Dates
+
+The date string is parsed against one of six orders — `yyyy mm dd`, `yy mm dd`, `mm dd yyyy`,
+`mm dd yy`, `dd mm yyyy`, `dd mm yy` — chosen by trying each against the first row and taking the
+first that parses, defaulting to `mm dd yyyy`. Month names are accepted (`Mar`, `March`); any
+non-digit run is a separator. A row that does not parse aborts the whole import with
+`Unable to parse date …`. Done in `parseDate()` and `getInitialDateFormat()`.
+
+**Consequence:** write ISO `YYYY-MM-DD`. It matches `yyyy mm dd` on the first try and cannot be
+confused with `dd mm yyyy` the way `03/04/2026` can.
+
+### 4.4 Amounts
+
+Three modes, mutually exclusive in the dialog:
+
+- **Single `amount` column** (the default): negative is an outflow. Parsed with
+  `looselyParseAmount()`: `(30.00)` and a Unicode minus become `-30.00`; the decimal marker is
+  whichever `.` or `,` is followed by 1–2 or 4–9 trailing digits (so `1,234.56` and `1.234,56` both
+  give `1234.56`, and `1,234` with three trailing digits is treated as a thousands separator, giving
+  `1234`); every other character is stripped. Done in
+  `~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/shared/util.ts`.
+- **Split `outflow` / `inflow` columns**: outflow is read first and, if non-zero, inflow is ignored
+  for that row.
+- **In/Out column**: a separate column whose value equal to the configured "out" string flips the
+  sign.
+
+Then the optional **flip** (for banks that print debits positive) and **multiplier**, then
+`amountToInteger()` — `Math.round(amount * 100)`. Done in `parseAmountFields()` in `utils.ts`.
+
+### 4.5 Category
+
+Matched **by exact name** against the budget's existing categories; anything else becomes `null`.
+A CSV cannot create a category. Done in `parseCategoryFields()` in `utils.ts`.
+
+### 4.6 What CSV cannot do
+
+- Carry an `imported_id`. Re-imports fall back to §8.3's fuzzy match, whose failure mode is silent.
+- Carry `imported_payee` separately from `payee_name`: the payee column becomes both.
+- Carry `cleared` per row: every row gets the dialog's "Clear on import" setting.
+- Split transactions.
+
+The right use of CSV is what §11 gives it: a human-readable companion beside the OFX, never the
+import.
+
+---
+
+## 5. QIF
+
+A line-oriented format with no identity and a brittle parser.
+
+- The **first line** must match `!Type:…` or the file is rejected outright.
+- Records end with a line that is exactly `^`.
+- Detail codes, one per line, keyed on the first character: `D` date, `T` amount, `N` number, `M`
+  memo, `A` address (repeatable), `P` payee (`&amp;` decoded), `L` category (`Cat:Sub` split on
+  `:`), `C` cleared status, and `S` / `E` / `$` for split lines.
+- **Any other leading character throws** `Unknown Detail Code` and the whole file fails — including
+  the `U` (amount) line some exporters emit, and a stray blank-with-spaces line.
+
+Done in `qif2json()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/transactions/import/qif2json.ts`.
+
+Mapping in `parseQIF()` in `parse-file.ts`: `T` through `looselyParseAmount()`; `D` passed as a raw
+string and parsed by the UI's date-order dialog like CSV; `P` → `payee_name`/`imported_payee`, with
+a swap-payee-and-memo option; `L` → `category` (name, matched like CSV); `M` → `notes` only when
+"Import notes" is on. Rows with no date or no amount are dropped silently. **Nothing becomes
+`imported_id`.**
+
+QIF is accepted, not recommended. Nothing in our pipeline writes it.
+
+---
+
+## 6. CAMT.053 XML
+
+ISO 20022 bank statements, the European equivalent of OFX. Dispatched on `.xml`.
+
+- Every `Ntry` element anywhere in the document is a row (camt.052, .053 and .054 all work; the
+  `Sts` booked/pending flag is **not** filtered — pending entries import).
+- `AcctSvcrRef` → `imported_id`. ✅ A real id.
+- `Amt` → amount, negated when `CdtDbtInd` is `DBIT`.
+- `ValDt` (value date) preferred, else `BookgDt`; `DtTm` is truncated to its date.
+- Payee: for a debit the creditor's `Nm`, for a credit the debtor's; else `AddtlNtryInf`.
+- Notes: `RmtInf/Ustrd` joined with spaces; else `AddtlNtryInf` when it differs from the payee;
+  else `NtryRef`. Dropped if the payee already contains it.
+- An `Ntry` with **multiple** `TxDtls` becomes one row per detail — and those rows get **no**
+  `imported_id`, because the id belongs to the entry, not the detail.
+- The XML `encoding` declaration is honoured.
+
+Done in `xmlCAMT2json()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/transactions/import/xmlcamt2json.ts`.
+
+No US institution in our archive produces CAMT; documented for completeness and because it is the
+other id-carrying format.
+
+---
+
+## 7. JSON over the API — what the MCP and CLI send
+
+The programmatic door skips file parsing entirely. The caller builds §2 rows and hands them to
+`importTransactions(accountId, transactions, opts)`; the machine plane's `POST /transactions/import`
+and `POST /ingest/file/apply` do the same from a route, and `ab_import_statement_file` in the MCP
+is a thin call to that route (apis.mdx §8.3, §11.4).
+
+### 7.1 The call
+
+The API method sends `api/transactions-import` with `{ accountId, transactions, isPreview: opts.dryRun, opts }`.
+Defined in `importTransactions()` in `~/BGit/Bryan_git/actual_budget_bryan/packages/api/methods.ts`.
+
+The handler checks a budget is open and forwards to the accounts app's `transactions-import`, which
+is wrapped `undoable()` — so an API import is one undo step, the same as a UI import. Done in
+`handlers['api/transactions-import']` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/api.ts` and
+`importTransactions()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/accounts/app.ts`.
+
+### 7.2 The options
+
+| Option                   | Default            | Meaning                                                                                                                        |
+| ------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `dryRun`                 | `false`            | Becomes `isPreview`. Runs the **entire** reconciliation and returns what it would do, writing nothing                          |
+| `defaultCleared`         | `true`             | `cleared` for rows that do not say                                                                                             |
+| `reimportDeleted`        | account preference | When `undefined` the account's `sync-reimport-deleted-{id}` pref is read, itself defaulting to **`true`** — a deleted row comes back on re-import unless this is passed `false` |
+| `payeeNameNormalization` | `'title-case'`     | `'original'` keeps the bank's casing. Anything else is refused with `APIError`                                                 |
+
+`strictIdChecking` is **not** exposed on this door; the handler leaves it at `reconcileTransactions`'
+own default, which is `true` (apis.mdx §11.7 says upstream defaults it to `false`; the code says
+`true`, and the code wins).
+
+### 7.3 The result
+
+```jsonc
+{
+  "errors": [],            // [{ message }] — a TransactionError (bad amount) lands here with nothing written
+  "added": ["…uuid…"],     // ids of rows inserted
+  "updated": ["…uuid…"],   // ids of existing rows changed by a match
+  "updatedPreview": [      // dry run only, one entry per matched row
+    { "transaction": {…}, "existing": {…} },        // would be updated; `existing` is the current row
+    { "transaction": {…}, "ignored": true }         // matched but nothing to change, or reconciled (locked)
+  ]
+}
+```
+
+A plain `Error` (missing date, unknown account) propagates as an exception rather than an `errors`
+entry.
+
+### 7.4 What the machine plane adds
+
+The plane pins `reimportDeleted: false` and reports the override when a caller changes it, always
+dry-runs first, and only writes with a confirm token whose fingerprint covers the exact change set
+(apis.mdx §7.3, §11.7). It never re-implements any of §8; the plan **is** `dryRun: true`.
+
+---
+
+## 8. De-duplication — how "already there" is decided
+
+This is the section that justifies the whole spec. Every door ends here.
+
+Matching is three passes over the incoming rows, each pass claiming rows the earlier pass did not,
+so a high-fidelity match is never stolen by a low-fidelity one. Done in `matchTransactions()` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/server/accounts/sync.ts`.
+
+### 8.1 Pass one — exact `imported_id`
+
+```sql
+SELECT * FROM v_transactions_internal WHERE imported_id = ? AND account = ?
+```
+
+If the row carries an `imported_id` and an existing row in the **same account** has it, that is the
+match, full stop. The lookup is against `v_transactions_internal` (which includes deleted rows) when
+`reimportDeleted` is on, else `v_transactions` (live rows only).
+
+### 8.2 What this means for the id
+
+- It is scoped to the account. The same `FITID` in two accounts is two transactions.
+- It must be **stable**: the same real-world transaction must produce the same id on every run, or
+  every run adds a duplicate.
+- It must be **unique**: two real transactions with the same id collapse into one, and the second
+  is silently reported as an update of the first.
+- It is stored verbatim. Length and characters are unconstrained in practice.
+
+A bank's own `FITID` satisfies both. A minted id must be built from the row's own content plus its
+ordinal **within its statement** (apis.mdx §11.5 explains why the scope is the statement, not the
+month). Ours is in §11.4.
+
+### 8.3 Passes two and three — fuzzy
+
+Only for rows pass one did not match. The candidate set is:
+
+```sql
+SELECT … FROM v_transactions
+WHERE (imported_id IS NULL OR ? IS NULL)   -- strictIdChecking: a row with an id only fuzzy-matches rows WITHOUT one
+  AND date >= ? AND date <= ?              -- ±7 days
+  AND amount = ?                           -- exact, in cents
+  AND account = ?
+```
+
+sorted by distance from the incoming date. Pass two takes the nearest candidate whose **payee id**
+matches; pass three takes the nearest candidate left, **with no payee check at all**. Each existing
+row can be claimed once.
+
+So a CSV row (no id) re-imported against an existing OFX row (with id) will **not** match under
+strict checking, and imports as a duplicate. And two genuinely different transactions for the same
+amount within a week of each other — two $12.00 lunches — fuzzy-match each other whenever the one
+already in the ledger has no id. Both failures are invisible at import time. This is the reason §11
+generates OFX.
+
+### 8.4 What an update changes
+
+For a matched row that is not reconciled (locked):
+
+| Field            | Rule                                                         |
+| ---------------- | ------------------------------------------------------------ |
+| `imported_id`    | set from the import                                          |
+| `payee`          | **existing wins**; import fills only if empty                |
+| `category`       | **existing wins**                                            |
+| `notes`          | **existing wins** — the operator's typed note survives       |
+| `imported_payee` | replaced from the import                                     |
+| `cleared`        | `existing || import`; a cleared row never becomes uncleared  |
+| `date`           | unchanged unless `updateDates` (bank sync only)              |
+
+A reconciled match is skipped and reported `ignored`. A row can be forced to insert even when it
+matches with `forceAddTransaction: true` (the UI's "add anyway" checkbox). Done in
+`reconcileTransactions()` in `sync.ts`.
+
+---
+
+## 9. Accounts — what the file lands in
+
+Import always targets one account the caller has already chosen. Nothing in any file selects or
+creates the account; `ACCTID` in an OFX is ignored (§3.3).
+
+The account model has **no type field**. There is no "credit card" or "brokerage" kind in the
+schema — an account is `name`, `offbudget` (0/1), `closed` (0/1), an optional `account_group_id`,
+and bank-sync bookkeeping. A card is an on-budget account whose balance runs negative; a brokerage is
+an off-budget account. `type` in apis.mdx §8.2 is a plane-level convenience that maps onto
+`offbudget`, not a column. Defined as `AccountEntity` in
+`~/BGit/Bryan_git/actual_budget_bryan/packages/loot-core/src/types/models/account.ts`.
+
+Creation over the API takes `{ name, offbudget, closed }` and an `initialBalance` in **cents**
+(converted to a decimal for the older internal handler, which creates a starting-balance
+transaction). Done in `handlers['api/account-create']` in `api.ts` and `createAccount()` in
+`packages/api/methods.ts`.
+
+Provisioning many accounts from a statement manifest, with the on/off-budget rule per kind and the
+`create` / `link` / `ambiguous` decision, is apis.mdx §12.
+
+---
+
+## 10. Money and dates
+
+- **Integer cents in every JSON body** (`amount: -4520`). Files carry decimals (`-45.20`) and are
+  converted by `Math.round(x * 100)` at the door. A non-integer in JSON refuses the batch.
+- **Negative is an outflow**, everywhere, for every account kind. A card purchase is negative; a
+  card payment received is positive. A brokerage deposit is positive. There is no per-account sign
+  convention, and the CSV "flip" toggle exists only because some banks print the opposite.
+- **Dates are `YYYY-MM-DD` strings.** OFX and CAMT dates are pre-parsed at the door; CSV and QIF
+  dates are parsed by the dialog's chosen order. In JSON the string is stored as given; the database
+  layer rejects a malformed one.
+- **Currency is not a field.** The budget has one currency; `CURDEF` is ignored.
+
+---
+
+## 11. What our pipeline generates
+
+The statement archive at `~/BGit/Bryan_git/Bryan_Arindom/bank_statements/` is audit evidence and is
+read-only. The pipeline in its `import/_tools/` directory reads statement PDFs and their text
+sidecars, reconciles every statement against its own printed balances, and writes import files.
+This section fixes what it writes.
+
+### 11.1 Two formats, one purpose each
+
+| File             | Purpose                                             | Imported? |
+| ---------------- | --------------------------------------------------- | --------- |
+| `*_actual.ofx`   | **the import** — carries `FITID`, re-import is safe | ✅        |
+| `*_actual.csv`   | for a person or a spreadsheet; never for the app    | ❌        |
+
+The CSV's header is exactly `Date,Payee,Notes,Category,Amount` so that, if someone does import it
+by hand, §4.2's guess maps every column without a dialog; `Category` is left empty because §4.5
+would discard any name that does not already exist.
+
+### 11.2 Layout
+
+```
+import/personal/
+  manifest_actual.csv                        one row per account (apis.mdx §11.2 columns)
+  {Institution}/
+    {StatementType}_ALL_actual.ofx           every month, one file — the normal thing to import
+    {StatementType}_ALL_actual.csv
+    {YYYY}/{MM}/
+      {StatementType}_actual.ofx             one statement period
+      {StatementType}_actual.csv
+      {StatementType}_provenance.txt         source PDF, extraction variant, reconciliation result
+```
+
+`Institution` is `Chase`, `First_Tech`, `Fidelity`. `StatementType` names the account by kind and
+last four — `Checking_x6467`, `Card_x4779`, `Brokerage_x5097`, `Savings_x8055`, `Mortgage_x2733` —
+or by Fidelity's own account name where no number is printed (`Brokerage`, `401k`, `IRA`, `Crypto`).
+The `_actual` suffix is the target application; a future Firefly III export would be `_firefly`.
+The `YYYY/MM` is the **statement period read from inside the document**, never the folder the PDF
+was found in.
+
+Only personal accounts are generated. The entity rule — which last-four digits are the household's
+and which are a company's — is in `~/BGit/Bryan_git/Bryan_Arindom/CLAUDE.md`, and a business account
+is never written here even when its statement sits beside a personal one.
+
+### 11.3 Which OFX message set
+
+| Account kind          | Message set            | Because                                                        |
+| --------------------- | ---------------------- | -------------------------------------------------------------- |
+| checking, savings     | `BANKMSGSRSV1`         | the bank path                                                  |
+| credit card           | `CREDITCARDMSGSRSV1`   | the card path; same `STMTTRN` shape                            |
+| brokerage, retirement | `BANKMSGSRSV1`         | **not** `INVSTMTMSGSRSV1` — see §13; only the cash legs exist |
+| mortgage              | `BANKMSGSRSV1`         | payments, interest and escrow are cash rows                    |
+
+### 11.4 The `FITID`
+
+```
+{last4}-{YYYYMMDD}-{amount_in_cents}-{ordinal}-{sha1_8(normalised description)}
+```
+
+`ordinal` is the row's index within **its statement**, so two identical rows on one day get `0` and
+`1`. The id depends only on the row's content and its position in its statement — never on the file
+name, the parse order, or the run date — so a re-run produces identical ids and a re-import updates
+rather than duplicates. Where a card's billing cycle straddles a month and one transaction appears
+on two statements, the two rows carry the same id and the `_ALL` roll-up keeps one.
+
+Fidelity has no per-row source (its OCR reads column-major, and pairing a date with an amount
+across hundreds of lines is a guess we refuse to make), so a Fidelity row is one month's printed
+"This Period" subtotal per category, dated to the period end, and its ordinal is the subtotal's
+position in that statement. Market-value movement is never a row.
+
+### 11.5 Per-row field rules
+
+| OFX tag    | Written as                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `DTPOSTED` | the statement's transaction date, `YYYYMMDD`, no time                                         |
+| `TRNAMT`   | signed decimal, two places, no separators; negative = money left the account                  |
+| `FITID`    | §11.4                                                                                        |
+| `NAME`     | the description as printed, `&` and `<` escaped, never truncated                              |
+| `MEMO`     | statement-level context only (check number, the sub-account for Fidelity); empty otherwise    |
+| `TRNTYPE`  | `DEBIT` / `CREDIT` by sign (ignored by Actual, kept for other consumers)                       |
+
+`LEDGERBAL` is written with the statement's printed closing balance. Actual ignores it; a person
+opening the file, or another tool, can reconcile against it.
+
+### 11.6 What is never written
+
+- A plug or balancing row. A statement that does not reconcile is still emitted, flagged
+  `UNRECONCILED` in its provenance file with the exact delta, and listed in `problems.txt`.
+- A guessed date, amount, or pairing.
+- A category.
+- A business account's data.
+- Anything into the statement archive itself, or into this repository.
+
+---
+
+## 12. Validation before a file is called done
+
+A generated OFX is validated by **Actual's own parser**, not by a hand-rolled check. `ofx2json.ts`
+is bundled with esbuild (`--format=cjs`; the XML library needs `require`) into the pipeline's work
+directory, and every generated file is run through it. Pass means: it parses, every row has a
+non-empty `date`, `fitId`, `name` and a numeric `amount`, and no two rows in one account share a
+`fitId`. Done by `_work/validate_ofx.cjs` in `~/BGit/Bryan_git/Bryan_Arindom/bank_statements/import/`.
+
+A row that fails is a pipeline bug, not a warning. The file is not written until it passes.
+
+---
+
+## 13. Known defects in the upstream importer
+
+Recorded here so nobody rediscovers them; each is a candidate for a fix in this repo.
+
+1. **Investment OFX with exactly one `INVBANKTRAN` crashes.** `getInvStmtTrn()` calls
+   `.flatMap()` on `INVTRANLIST.INVBANKTRAN`, but the XML library returns a single element as an
+   object, not an array, so a one-transaction investment statement throws `flatMap is not a
+   function` and the import fails with `Failed importing file`. The bank and card paths guard this
+   with `getAsArray()`; the investment path does not. Workaround, which §11.3 adopts: emit brokerage
+   cash as `BANKMSGSRSV1`. Location: `ofx2json.ts`.
+2. **An unparseable `TRNAMT` imports as zero.** `parseOFX()` appends an error but keeps the row with
+   `amount: 0`; the UI shows the error, but a programmatic caller that ignores `errors` imports a
+   zero-amount row. Location: `parse-file.ts`.
+3. **QIF fails on any unknown detail code**, including the common `U` line. Location:
+   `qif2json.ts`.
+4. **CAMT sub-entries lose their id.** An `Ntry` with several `TxDtls` becomes id-less rows (§6).
+5. **The spec/code disagreement on `strictIdChecking`** — apis.mdx §11.7 records the upstream
+   default as `false`; `reconcileTransactions()` defaults it to `true`. apis.mdx should be
+   corrected; the pinned value is right either way.
+
+---
+
+## 14. Acceptance criteria
+
+- [ ] Every generated `*_actual.ofx` parses with the bundled `ofx2json` and every row has a date,
+      id, name and numeric amount.
+- [ ] No two rows in one account share a `FITID`; re-running the pipeline produces byte-identical
+      ids.
+- [ ] Importing an `_ALL_actual.ofx` twice into an empty account yields `added: N` then
+      `added: 0, updated: 0` on the dry run of the second import.
+- [ ] A note typed on an imported row survives a re-import byte for byte.
+- [ ] Every generated `*_actual.csv` auto-maps in the UI with no column changed by hand.
+- [ ] No file under `import/personal/` contains a business account's last four digits.
+- [ ] The sum of every month's rows equals that statement's printed closing minus opening balance,
+      or the month is listed in `problems.txt` with the delta.
+
+---
+
+## 15. Related specs
+
+- `apis.mdx` — the machine plane: §7 write protocol, §8.3 `/transactions/import`, §11 ingest, §12
+  provisioning. The routes that carry §7 of this document.
+- `mcp.mdx` — the `ab_*` tools over those routes; §11 is the statements family.
+- `cli.mdx` — `abx statements …`, the operator's view of the same pipeline.
+- `~/BGit/Bryan_git/Bryan_Arindom/finances/prompts/p_actual_statemnts_to_import_csvs.md` — the prompt
+  that runs the pipeline against the real archive.

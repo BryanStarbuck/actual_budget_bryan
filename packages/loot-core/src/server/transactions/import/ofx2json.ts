@@ -97,7 +97,10 @@ function getInvStmtTrn(ofx) {
   const result = stmtTrnRs.flatMap(s => {
     const stmtRs = s?.['INVSTMTRS'];
     const tranList = stmtRs?.['INVTRANLIST'];
-    const stmtTrn = tranList?.['INVBANKTRAN']?.flatMap(t => t?.['STMTTRN']);
+    // A single INVBANKTRAN is an object, not an array (same as the bank path).
+    const stmtTrn = getAsArray(tranList?.['INVBANKTRAN']).flatMap(t =>
+      getAsArray(t?.['STMTTRN']),
+    );
     return getAsArray(stmtTrn);
   });
   return result;

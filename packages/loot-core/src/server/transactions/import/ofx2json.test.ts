@@ -1,4 +1,4 @@
-import { html2Plain } from './ofx2json';
+import { html2Plain, ofx2json } from './ofx2json';
 
 describe('html2Plain', () => {
   test('regular text works', async () => {
@@ -29,5 +29,25 @@ describe('html2Plain', () => {
     expect(html2Plain('Hello, &amp;quot;world&amp;quot;!')).toBe(
       'Hello, &quot;world&quot;!',
     );
+  });
+});
+
+describe('ofx2json investment statements', () => {
+  const inv = (banktran: string) => `OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+
+<OFX><INVSTMTMSGSRSV1><INVSTMTTRNRS><INVSTMTRS><INVTRANLIST>${banktran}</INVTRANLIST></INVSTMTRS></INVSTMTTRNRS></INVSTMTMSGSRSV1></OFX>`;
+  const trn = (id: string) =>
+    `<INVBANKTRAN><STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260105<TRNAMT>10.00<FITID>${id}<NAME>Dividend</STMTTRN><SUBACCTFUND>CASH</INVBANKTRAN>`;
+
+  test('a single INVBANKTRAN parses (was: flatMap is not a function)', async () => {
+    const result = await ofx2json(inv(trn('a')));
+    expect(result.transactions.map(t => t.fitId)).toEqual(['a']);
+  });
+
+  test('several INVBANKTRAN parse', async () => {
+    const result = await ofx2json(inv(trn('a') + trn('b')));
+    expect(result.transactions.map(t => t.fitId)).toEqual(['a', 'b']);
   });
 });
