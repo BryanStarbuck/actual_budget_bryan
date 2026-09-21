@@ -8,6 +8,7 @@
  */
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
+import { CapabilityCache } from './capabilities.js';
 import { MachinePlaneClient } from './client.js';
 import { ConfigError, loadConfig } from './config.js';
 import type { Config } from './config.js';
@@ -78,7 +79,14 @@ export class Main {
 
     const keyFingerprint = fingerprint(key);
     const client = new MachinePlaneClient(config, key);
-    const host = new McpServerHost({ config, client, logger, keyFingerprint });
+    const capabilities = new CapabilityCache(client);
+    const host = new McpServerHost({
+      config,
+      client,
+      logger,
+      keyFingerprint,
+      capabilities,
+    });
 
     // One line, stderr, naming the target — so a transcript shows which
     // install answered (§7.3).

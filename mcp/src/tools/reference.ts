@@ -25,6 +25,7 @@ function listTool(
 ): ToolDef {
   return {
     name,
+    route: { method: 'GET', path: route },
     tier: 'read',
     description: describe({ what, tier: 'read' }),
     inputSchema: NO_ARGS,
@@ -82,6 +83,7 @@ const QUERYABLE_TABLES = [
 
 export const describeSchema: ToolDef = {
   name: 'ab_describe_schema',
+  route: { method: 'GET', path: '/query/schema' },
   tier: 'read',
   description: describe({
     what: 'Describes the tables and fields ab_query may name, so a query can be written without guessing.',
@@ -98,6 +100,7 @@ export const describeSchema: ToolDef = {
 
 export const query: ToolDef = {
   name: 'ab_query',
+  route: { method: 'POST', path: '/query' },
   tier: 'read',
   description: describe({
     what: 'Runs one read-only ActualQL query against the budget, for questions the typed tools do not cover. Single statement, row-capped, byte-capped and timed out. Amounts come back in integer cents.',

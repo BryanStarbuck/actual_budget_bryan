@@ -14,6 +14,7 @@ import type { ToolDef } from './tool.js';
 
 export const listAccounts: ToolDef = {
   name: 'ab_list_accounts',
+  route: { method: 'GET', path: '/accounts' },
   tier: 'read',
   description: describe({
     what: 'Lists the operator\'s accounts with their current balances in integer cents. Closed accounts are excluded unless include_closed is true.',
@@ -43,6 +44,7 @@ export const listAccounts: ToolDef = {
 
 export const getAccount: ToolDef = {
   name: 'ab_get_account',
+  route: { method: 'GET', path: '/accounts/:id' },
   tier: 'read',
   description: describe({
     what: 'Gets one account by id: its name, type, closed state and current balance in integer cents.',
@@ -72,6 +74,7 @@ export const getAccount: ToolDef = {
 
 export const getAccountBalance: ToolDef = {
   name: 'ab_get_account_balance',
+  route: { method: 'GET', path: '/accounts/:id/balance' },
   tier: 'read',
   description: describe({
     what: 'Gets one account\'s balance in integer cents, optionally as of a past date. The answer carries the cutoff it was computed against.',
@@ -114,6 +117,7 @@ export const getAccountBalance: ToolDef = {
 
 export const listTransactions: ToolDef = {
   name: 'ab_list_transactions',
+  route: { method: 'GET', path: '/transactions' },
   tier: 'read',
   description: describe({
     what: 'Lists transactions for one account over a date range, with optional category, payee and cleared filters. Amounts are integer cents; rows carry is_parent and is_child so split transactions are visible.',
@@ -202,6 +206,7 @@ export const listTransactions: ToolDef = {
 
 export const getTransaction: ToolDef = {
   name: 'ab_get_transaction',
+  route: { method: 'GET', path: '/transactions/:id' },
   tier: 'read',
   description: describe({
     what: 'Gets one transaction by id, including its split children if it is a split parent. Amounts are integer cents.',
@@ -227,6 +232,7 @@ export const getTransaction: ToolDef = {
 
 export const listUncategorized: ToolDef = {
   name: 'ab_list_uncategorized',
+  route: { method: 'GET', path: '/transactions/uncategorized' },
   tier: 'read',
   description: describe({
     what: 'Lists every transaction with no category assigned, across all accounts — the commonest real question an operator has about their budget.',

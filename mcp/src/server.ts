@@ -1,4 +1,3 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 /**
  * The JSON-RPC surface — pm/mcp.mdx §8, §9.3, §12.
  *
@@ -9,16 +8,19 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
  * wrote — those descriptions are the product (§8.2). Zod is still used, for
  * runtime parsing inside each tool (gate 5).
  */
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { auditLine } from './audit.js';
+import type { CapabilityCache } from './capabilities.js';
 import type { MachinePlaneClient } from './client.js';
 import type { Config } from './config.js';
 import { ToolError } from './envelope.js';
 import type { Envelope } from './envelope.js';
+import { fail } from './envelope.js';
 import { checkInput, checkMode, checkNotForeign } from './gates.js';
 import { INSTRUCTIONS } from './instructions.js';
 import type { Logger } from './logger.js';
@@ -33,6 +35,7 @@ export type HostOptions = {
   client: MachinePlaneClient;
   logger: Logger;
   keyFingerprint: string;
+  capabilities: CapabilityCache;
 };
 
 /**
@@ -41,7 +44,24 @@ export type HostOptions = {
  * teaches the model nothing, and a model that cannot see the tool goes
  * looking for another way to do the same thing (§7.1 gate 4).
  */
-function describeForListing(tool: ToolDef, config: Config): string {
+function describeForListing(
+  tool: ToolDef,
+  config: Config,
+  capabilities: CapabilityCache,
+): string {
+  // A route the running app has not built yet. Said plainly, because the
+  // alternative is the model calling it, getting not_found, and trying three
+  // variations of the same impossible call.
+  const snapshot = capabilities.snapshot();
+  if (snapshot !== null) {
+    const status = snapshot.routes.get(
+      `${tool.route.method} ${tool.route.path}`,
+    );
+    if (status !== 'live') {
+      return `${tool.description} CURRENTLY UNAVAILABLE: this version of the app does not implement ${tool.route.method} ${tool.route.path} yet, so this tool cannot answer. Do not retry it; tell the operator.`;
+    }
+  }
+
   if (tool.tier !== 'write') {
     return tool.description;
   }
@@ -73,9 +93,13 @@ export class McpServerHost {
       },
     );
 
-    this.server.setRequestHandler(ListToolsRequestSchema, async () =>
-      this.handleListTools(),
-    );
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      // Warm the route table before describing the catalogue, so the
+      // "currently unavailable" markers are accurate on the very first
+      // listing rather than only after some tool has already failed.
+      await this.#opts.capabilities.refresh();
+      return this.handleListTools();
+    });
     this.server.setRequestHandler(CallToolRequestSchema, async request =>
       this.handleCallTool(request.params.name, request.params.arguments ?? {}),
     );
@@ -91,7 +115,11 @@ export class McpServerHost {
     return {
       tools: TOOLS.map(tool => ({
         name: tool.name,
-        description: describeForListing(tool, this.#opts.config),
+        description: describeForListing(
+          tool,
+          this.#opts.config,
+          this.#opts.capabilities,
+        ),
         inputSchema: tool.inputSchema,
       })),
     };
@@ -135,6 +163,9 @@ export class McpServerHost {
 
       gate = 'input';
       const parsed = checkInput(tool, args);
+
+      gate = 'route';
+      await this.#assertRouteAvailable(tool);
 
       gate = undefined;
       const result = await tool.run(parsed, { client, config });
@@ -222,6 +253,31 @@ export class McpServerHost {
           },
         },
         true,
+      );
+    }
+  }
+
+  /**
+   * Refuse a tool whose backing route this build does not have.
+   *
+   * `not_ready` rather than `not_found`, because the tool exists and the
+   * route will exist — what is missing is this version of the app, and that
+   * is a different instruction to the operator than "no such thing".
+   */
+  async #assertRouteAvailable(tool: ToolDef): Promise<void> {
+    const status = await this.#opts.capabilities.statusOf(
+      tool.route.method,
+      tool.route.path,
+    );
+    // `unknown` is allowed through on purpose: if we could not read the route
+    // table, the call itself produces a better diagnosis than a guess would.
+    if (status === 'planned' || status === 'absent') {
+      throw fail(
+        'not_ready',
+        status === 'planned'
+          ? `${tool.name} needs ${tool.route.method} ${tool.route.path}, which this version of the app declares but has not implemented yet.`
+          : `${tool.name} needs ${tool.route.method} ${tool.route.path}, which this version of the app does not have.`,
+        'this will not start working on a retry — tell the operator the app needs updating for this tool',
       );
     }
   }

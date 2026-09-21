@@ -18,6 +18,7 @@ const noArgs = z.object({}).strip();
 
 export const listCategories: ToolDef = {
   name: 'ab_list_categories',
+  route: { method: 'GET', path: '/categories' },
   tier: 'read',
   description: describe({
     what: 'Lists the operator\'s budget categories with their ids, names and group membership.',
@@ -33,6 +34,7 @@ export const listCategories: ToolDef = {
 
 export const listCategoryGroups: ToolDef = {
   name: 'ab_list_category_groups',
+  route: { method: 'GET', path: '/category-groups' },
   tier: 'read',
   description: describe({
     what: 'Lists the category groups that organise the budget, with the categories in each.',
@@ -48,6 +50,7 @@ export const listCategoryGroups: ToolDef = {
 
 export const listBudgetMonths: ToolDef = {
   name: 'ab_list_budget_months',
+  route: { method: 'GET', path: '/budget/months' },
   tier: 'read',
   description: describe({
     what: 'Lists the months that exist in this budget, as YYYY-MM.',
@@ -63,6 +66,7 @@ export const listBudgetMonths: ToolDef = {
 
 export const getBudgetMonth: ToolDef = {
   name: 'ab_get_budget_month',
+  route: { method: 'GET', path: '/budget/month/:month' },
   tier: 'read',
   description: describe({
     what: 'Gets one budget month: per category, the amount budgeted, spent, the balance and any carryover, all in integer cents. A category with no budget entry returns budgeted: null, which means "not budgeted" and is DIFFERENT from budgeted: 0, which means the operator deliberately budgeted nothing.',
@@ -92,6 +96,7 @@ export const getBudgetMonth: ToolDef = {
 
 export const getCategorySpend: ToolDef = {
   name: 'ab_get_category_spend',
+  route: { method: 'GET', path: '/budget/category-spend' },
   tier: 'read',
   description: describe({
     what: 'Gets the total spent in one category over a date range, in integer cents, computed by the app.',
@@ -127,6 +132,7 @@ export const getCategorySpend: ToolDef = {
 
 export const listBudgetGaps: ToolDef = {
   name: 'ab_list_budget_gaps',
+  route: { method: 'GET', path: '/budget/gaps' },
   tier: 'read',
   description: describe({
     what: 'Lists categories that have spending in a month but NO budget entry for it — the "not budgeted, as distinct from budgeted zero" question, asked directly.',

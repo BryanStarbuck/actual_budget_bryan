@@ -16,7 +16,7 @@
  */
 import { z } from 'zod';
 
-import { centsField, describe, monthField } from './tool.js';
+import { cents, centsField, describe, monthField } from './tool.js';
 import type { ToolDef } from './tool.js';
 
 /** Every write tool carries these, and the host enforces them (§9.7). */
@@ -46,6 +46,7 @@ const confirmSchema = {
 
 export const addTransactions: ToolDef = {
   name: 'ab_add_transactions',
+  route: { method: 'POST', path: '/transactions' },
   tier: 'write',
   description: describe({
     what: 'Adds one or more transactions to a single account. Amounts are integer cents; negative is money out.',
@@ -92,9 +93,10 @@ export const addTransactions: ToolDef = {
           z
             .object({
               date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-              // .int() is the money rule at the gate: a model asked for
-              // "about $123" produces 123.5, and this is where that stops.
-              amount: z.number().int(),
+              // The money rule at the gate: a model asked for "about $123"
+              // produces 123.5, and this is where that stops — with a message
+              // naming the integer it meant.
+              amount: cents(),
               payee_name: z.string().optional(),
               notes: z.string().optional(),
               category_id: z.string().optional(),
@@ -124,6 +126,7 @@ export const addTransactions: ToolDef = {
 
 export const updateTransaction: ToolDef = {
   name: 'ab_update_transaction',
+  route: { method: 'PATCH', path: '/transactions/:id' },
   tier: 'write',
   description: describe({
     what: 'Updates fields on one existing transaction — its category, notes, payee, cleared state or amount in integer cents.',
@@ -164,7 +167,7 @@ export const updateTransaction: ToolDef = {
           notes: z.string().optional(),
           payee_name: z.string().optional(),
           cleared: z.boolean().optional(),
-          amount: z.number().int().optional(),
+          amount: cents().optional(),
         })
         .strip(),
       ...confirmSchema,
@@ -188,6 +191,7 @@ export const updateTransaction: ToolDef = {
 
 export const setBudgetAmount: ToolDef = {
   name: 'ab_set_budget_amount',
+  route: { method: 'PATCH', path: '/budget/month/:month/category/:id' },
   tier: 'write',
   description: describe({
     what: 'Sets the budgeted amount, in integer cents, for one category in one month.',
@@ -213,7 +217,7 @@ export const setBudgetAmount: ToolDef = {
     .object({
       month: z.string().regex(/^\d{4}-\d{2}$/),
       category_id: z.string().min(1),
-      amount: z.number().int(),
+      amount: cents(),
       ...confirmSchema,
     })
     .strip(),
@@ -233,6 +237,7 @@ export const setBudgetAmount: ToolDef = {
 
 export const sync: ToolDef = {
   name: 'ab_sync',
+  route: { method: 'POST', path: '/sync' },
   tier: 'write',
   description: describe({
     what: 'Syncs this budget with the operator\'s sync server, pushing local changes and pulling any made on their other devices.',

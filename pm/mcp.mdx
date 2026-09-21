@@ -799,17 +799,37 @@ forgotten.
 
 `ab_<verb>_<noun>`, verb from a **closed set**:
 
-| Verb                                                | Means                                             | Writes? |
-| --------------------------------------------------- | ------------------------------------------------- | ------- |
-| `list_`                                             | read many                                         | no      |
-| `get_`                                              | read one                                          | no      |
-| `scan_`                                             | read the filesystem, compute nothing persistent   | no      |
-| `plan_`                                             | compute what a write would do, and change nothing | no      |
-| `add_` / `update_` / `delete_` / `apply_` / `sync_` | change something                                  | **yes** |
+| Verb                                                           | Means                                             | Writes? |
+| -------------------------------------------------------------- | ------------------------------------------------- | ------- |
+| `list_`                                                        | read many                                         | no      |
+| `get_`                                                         | read one                                          | no      |
+| `scan_`                                                        | read the filesystem, compute nothing persistent   | no      |
+| `plan_`                                                        | compute what a write would do, and change nothing | no      |
+| `describe_`                                                    | read a shape — a schema, a map file's structure   | no      |
+| `add_` / `update_` / `set_` / `delete_` / `apply_` / `sync_`   | change something                                  | **yes** |
+
+Plus two bare names with no noun, because the noun would be this server: **`ab_whoami`**,
+**`ab_health`**. A third, **`ab_query`**, is the escape hatch and is named for what it is.
 
 There is no `generate_` family, because this server spends no credits and calls no model. There is
 no `search_` family, because `list_` with a filter is the same thing and `search_` is the verb both
 neighbours use (§3.3).
+
+**Why `set_` is in the set, and why this table used to be wrong.** An earlier draft listed the write
+verbs as `add_ / update_ / delete_ / apply_ / sync_` — and then §9.5 named `ab_set_budget_amount`,
+a tool whose verb was not in its own closed set. A catalogue test caught it, which is the right
+outcome and the reason that test exists.
+
+The fix is to admit `set_` rather than rename the tool, for two reasons. **Assignment is not
+update-in-place:** budgeting an amount for a month writes a value whether or not one was there
+before, and `update_` implies a thing that already exists — exactly the distinction §10.2 spends a
+section on. **And the three front doors must agree:** the CLI verb is `abx budget set-amount`
+([cli.mdx](./cli.mdx) §6). A model, an operator and a script should not have to learn that the same
+action is called `set` in a shell and `update` in a tool. `describe_` is added on the same basis: it
+was already carried by two shipped tools and reads better than `get_` for a shape.
+
+The closed set earns its keep by letting a model infer **writes or not** from a name it has only
+half-read. Six write verbs do that as well as five; a verb outside the table does not.
 
 ### 9.2 The four mandatory description clauses
 

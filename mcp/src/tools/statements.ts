@@ -41,6 +41,7 @@ const filterSchema = {
 
 export const scanStatements: ToolDef = {
   name: 'ab_scan_statements',
+  route: { method: 'POST', path: '/statements/scan' },
   tier: 'read',
   description: describe({
     what: 'Walks the configured bank-statement tree and returns entity/bank/account/period groups with counts, flagging months with no statement, duplicate scans, and PDFs with no usable extraction. Changes nothing on disk.',
@@ -66,6 +67,7 @@ export const scanStatements: ToolDef = {
 
 export const listMissingStatements: ToolDef = {
   name: 'ab_list_missing_statements',
+  route: { method: 'POST', path: '/statements/missing' },
   tier: 'read',
   description: describe({
     what: 'Lists the account-months that have no statement file, as {entity, bank, account, period} records.',
@@ -89,6 +91,7 @@ export const listMissingStatements: ToolDef = {
 
 export const extractStatements: ToolDef = {
   name: 'ab_extract_statements',
+  route: { method: 'POST', path: '/statements/extract' },
   tier: 'read',
   description: describe({
     what: 'Turns statement PDFs and their text sidecars into canonical rows in the staging directory. This writes only into the staging area under the statements root and NEVER touches the budget, so it cannot change any account.',
@@ -121,6 +124,7 @@ export const extractStatements: ToolDef = {
 
 export const listStatementDuplicates: ToolDef = {
   name: 'ab_list_statement_duplicates',
+  route: { method: 'POST', path: '/statements/duplicates' },
   tier: 'read',
   description: describe({
     what: 'Lists every account-month covered by more than one statement, the verdict for each file (identical, superseded or conflict), and the rule that decided it.',
@@ -146,6 +150,7 @@ export const listStatementDuplicates: ToolDef = {
 
 export const getStatementRows: ToolDef = {
   name: 'ab_get_statement_rows',
+  route: { method: 'POST', path: '/statements/rows' },
   tier: 'read',
   description: describe({
     what: 'Returns the de-duplicated rows extracted for one account-month: date, amount in integer cents, payee, the raw bank description, and the provenance of each row. Parsed rows only — never the raw text of the statement.',
@@ -194,6 +199,7 @@ export const getStatementRows: ToolDef = {
 
 export const describeStatementMap: ToolDef = {
   name: 'ab_describe_statement_map',
+  route: { method: 'POST', path: '/statements/map' },
   tier: 'read',
   description: describe({
     what: 'Describes the map file that connects folders in the statements tree to budget accounts, and reports which mappings currently resolve to a real account.',
@@ -223,6 +229,7 @@ export const describeStatementMap: ToolDef = {
 
 export const planStatementImport: ToolDef = {
   name: 'ab_plan_statement_import',
+  route: { method: 'POST', path: '/statements/plan' },
   tier: 'read',
   description: describe({
     what: 'Computes exactly what an import would do, per account: rows extracted, rows after de-duplication, how many the budget already has, how many the app would fuzzy-match, and how many are new. Returns a confirm_token. Changes nothing.',
@@ -258,6 +265,7 @@ export const planStatementImport: ToolDef = {
 
 export const applyStatementImport: ToolDef = {
   name: 'ab_apply_statement_import',
+  route: { method: 'POST', path: '/statements/apply' },
   tier: 'write',
   description: describe({
     what: 'Runs a statement import plan through the budget application\'s own importer, adding the new transactions.',
