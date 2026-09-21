@@ -41,18 +41,36 @@ Bracket key:
                 * /schema moved to P2 — the AQL schema is not exposed by
                   @actual-app/api, so it needs the query family's work
 
-[     ]  P2   read families: accounts, transactions, categories, budget months,
-              reference data, /query AND /schema
-[     ]  P3   confirm.ts and the write protocol; transactions, budget amounts, /sync, /undo
-[     ]  P4   ingest plane, prepared mode: manifest, scan, coverage, map, plan, apply, file import
-[     ]  P5   account provisioning and the map writer
+[IN-PR]  P2   read families — PARTIAL (the import subset is live)
+              live  : GET /budgets, GET /accounts, /accounts/:id, /accounts/:id/balance,
+                      GET /transactions
+              todo  : categories, budget months, reference data, /query, /schema
+[IN-PR]  P3   confirm.ts and the write protocol — LIVE; writes so far: POST /budgets,
+              POST /budgets/:id/load, POST /accounts, POST /transactions/import, POST /sync
+              todo  : /undo (declared planned), budget amounts, PATCH /transactions
+[IN-PR]  P4   ingest plane, prepared mode — LIVE: GET /ingest/manifest,
+              POST /ingest/file/plan, POST /ingest/file/apply
+              todo  : scan, coverage, map, /ingest/plan + /ingest/apply (many files)
+[IN-PR]  P5   account provisioning — LIVE: POST /ingest/accounts/plan, /ingest/accounts/apply
+              todo  : the map writer
+              built : 2026-09-21
+              tests : confirm.test.ts (8), import-routes.test.ts (19); src/machine 93/93
+              mcp   : 38 tools (31 read, 7 write); new: ab_get_statement_manifest,
+                      ab_plan_accounts, ab_apply_accounts, ab_plan_file_import,
+                      ab_apply_file_import. mcp tests 53/53.
+              engine: now JOINS the sync server it is mounted in (machine/session.ts mints a
+                      never-expiring session row, auth_method 'machine', for the owner), so
+                      budgets it creates and imports sync to the browser. Before the server is
+                      bootstrapped it runs local-only and /health says so.
+              verified live: 12 personal accounts imported through the MCP; every re-plan
+                      reported 0 to add; every balance equals the latest printed statement.
 [     ]  P6   the envelope operations: cover, transfer, copy, averages, holds, goal templates
 [     ]  P7   the analytics plane
 [     ]  P8   rules, schedules, payees, tags, notes, /rules/preview, reconcile
 [     ]  P9   raw ingest mode: PDF extraction, both de-dupe layers, staging
 [     ]  P10  admin tier, batch, NDJSON progress, audit trail, the full canary suite
 
-NEXT: P2
+NEXT: finish P2 (categories, months, /query) so the remaining 28 read tools answer
 
 KNOWN PRE-EXISTING FLAKE IN THE SYNC-SERVER SUITE (not ours — measured)
   `yarn workspace @actual-app/sync-server run test` fails roughly one run in four, on

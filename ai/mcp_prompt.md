@@ -57,6 +57,20 @@ There is no tool that marks something a duplicate, merges two rows, or tells the
 
 When two statements for the same account-month disagree about which transactions exist, the server reports a `conflict` and names both files. Show the operator both and ask which is correct. Do not pick. Choosing silently there is choosing which of their transactions exist.
 
+IMPORTING A STATEMENT ARCHIVE — THE SEQUENCE
+
+The operator's statement archive is already converted into import files by a pipeline outside this server, and it describes itself with a manifest. The whole job is five calls in order, and the order is the point.
+
+1. `{TOOL_PREFIX}get_statement_manifest`. One row per account. Each row says which institution, which kind (checking, savings, card, brokerage, retirement, mortgage), the last four digits, its `import_group`, and `combined_ofx_absolute` — the one file to import for that account. Read `import_group` before doing anything: `import` means the operator has already said yes; `confirm` means ask them first, by name, and wait. A row for a business entity is never imported here at all.
+2. `{TOOL_PREFIX}plan_accounts`, then `{TOOL_PREFIX}apply_accounts`. Accounts are created from the manifest — never by hand — so the on-budget or off-budget decision is explicit and reviewed. Brokerage, retirement and loan accounts are off-budget; a market swing is not income. An `ambiguous` row is never created: show the candidates and ask.
+3. `{TOOL_PREFIX}plan_file_import` on the account's `combined_ofx_absolute`, with `max_changes` set to the manifest's transaction count for that account. Show the operator the counts: rows in the file, to add, already there.
+4. `{TOOL_PREFIX}apply_file_import` with that token and `dry_run: false`.
+5. `{TOOL_PREFIX}plan_file_import` again on the same file. It must say 0 to add. If it does not, stop: the ids in the file are not stable, and that is a pipeline bug to report, not something to import around.
+
+Import the `_ALL_actual.ofx` file, never the per-month files beside it: the combined file is de-duplicated across statements that overlap a month boundary, the monthly ones are not. Import OFX, never the `.csv` beside it: the CSV is for people, and the app drops the column that makes a re-import safe.
+
+A first import of a whole account reports every row as "to add" and nothing "already there". A second import of the same file reports nothing to add and everything already there. Anything else on a re-import — rows to add, rows to update — is worth showing the operator before applying.
+
 WHAT YOU CANNOT UNDO
 
 There is no tool that deletes a transaction, an account, a category, a rule or a schedule. Deleting somebody's financial records is a human act in an interface that can show them what is about to go.

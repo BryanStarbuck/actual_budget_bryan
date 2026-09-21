@@ -45,8 +45,12 @@ import { MachineError, sendError, sendOk, toMachineError } from './envelope.js';
 import { machineAuthMiddleware } from './machine-auth.js';
 import type { MachineRequest } from './machine-auth.js';
 import type { AnyRouteDef } from './route.js';
+import { accountRoutes } from './routes/accounts.js';
+import { budgetRoutes } from './routes/budgets.js';
+import { ingestRoutes } from './routes/ingest.js';
 import { MAX_BODY_BYTES, planeRoutes } from './routes/plane.js';
 import { plannedRoutes } from './routes/planned.js';
+import { transactionRoutes } from './routes/transactions.js';
 import { assertTier, grantsFromEnv } from './tier.js';
 import type { TierGrants } from './tier.js';
 
@@ -70,6 +74,10 @@ let plane: { key: string; grants: TierGrants; env: NodeJS.ProcessEnv } | null =
  */
 export const ROUTES: readonly AnyRouteDef[] = [
   ...planeRoutes,
+  ...budgetRoutes,
+  ...accountRoutes,
+  ...transactionRoutes,
+  ...ingestRoutes,
   ...plannedRoutes,
 ];
 

@@ -146,13 +146,13 @@ NEWFILEUID:NONE
 <DTSERVER>20260301000000<LANGUAGE>ENG</SONRS></SIGNONMSGSRSV1>
 <BANKMSGSRSV1><STMTTRNRS><TRNUID>0<STATUS><CODE>0<SEVERITY>INFO</STATUS>
 <STMTRS><CURDEF>USD
-<BANKACCTFROM><BANKID>000000000<ACCTID>6467<ACCTTYPE>CHECKING</BANKACCTFROM>
+<BANKACCTFROM><BANKID>000000000<ACCTID>4021<ACCTTYPE>CHECKING</BANKACCTFROM>
 <BANKTRANLIST><DTSTART>20260201<DTEND>20260228
 <STMTTRN>
 <TRNTYPE>DEBIT
 <DTPOSTED>20260203
 <TRNAMT>-45.20
-<FITID>6467-20260203-4520-0-9a1f3c77
+<FITID>4021-20260203-4520-0-9a1f3c77
 <NAME>Trader Joe's #142
 <MEMO>Card purchase 02/03
 </STMTTRN>
@@ -568,7 +568,7 @@ import/personal/
 ```
 
 `Institution` is `Chase`, `First_Tech`, `Fidelity`. `StatementType` names the account by kind and
-last four — `Checking_x6467`, `Card_x4779`, `Brokerage_x5097`, `Savings_x8055`, `Mortgage_x2733` —
+last four — `Checking_x4021`, `Card_x8812`, `Brokerage_x3310`, `Savings_x6620`, `Mortgage_x5190` —
 or by Fidelity's own account name where no number is printed (`Brokerage`, `401k`, `IRA`, `Crypto`).
 The `_actual` suffix is the target application; a future Firefly III export would be `_firefly`.
 The `YYYY/MM` is the **statement period read from inside the document**, never the folder the PDF
@@ -584,7 +584,7 @@ is never written here even when its statement sits beside a personal one.
 | --------------------- | ---------------------- | -------------------------------------------------------------- |
 | checking, savings     | `BANKMSGSRSV1`         | the bank path                                                  |
 | credit card           | `CREDITCARDMSGSRSV1`   | the card path; same `STMTTRN` shape                            |
-| brokerage, retirement | `BANKMSGSRSV1`         | **not** `INVSTMTMSGSRSV1` — see §13; only the cash legs exist |
+| brokerage, retirement | `BANKMSGSRSV1`         | **not** `INVSTMTMSGSRSV1` — see §13; value rows, §11.6a        |
 | mortgage              | `BANKMSGSRSV1`         | payments, interest and escrow are cash rows                    |
 
 ### 11.4 The `FITID`
@@ -599,10 +599,9 @@ name, the parse order, or the run date — so a re-run produces identical ids an
 rather than duplicates. Where a card's billing cycle straddles a month and one transaction appears
 on two statements, the two rows carry the same id and the `_ALL` roll-up keeps one.
 
-Fidelity has no per-row source (its OCR reads column-major, and pairing a date with an amount
-across hundreds of lines is a guess we refuse to make), so a Fidelity row is one month's printed
-"This Period" subtotal per category, dated to the period end, and its ordinal is the subtotal's
-position in that statement. Market-value movement is never a row.
+Value-mode rows (§11.6a) are ids of the form `{last4}-value-{YYYYMMDD}-{cents}` and
+`{last4}-opening-{YYYYMMDD}-{cents}`: built from the printed figures alone, so they are just as
+stable across runs.
 
 ### 11.5 Per-row field rules
 
@@ -617,6 +616,29 @@ position in that statement. Market-value movement is never a row.
 
 `LEDGERBAL` is written with the statement's printed closing balance. Actual ignores it; a person
 opening the file, or another tool, can reconcile against it.
+
+### 11.6a Two row modes, by account kind
+
+A cash account and an investment account are different ledgers, and the pipeline writes them
+differently. Every figure in both is one the statement printed.
+
+| Mode    | Kinds                                                             | Rows                                                                                                                                                                    |
+| ------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cash`  | checking, savings, card                                           | the statement's transaction rows, plus **one opening row** when the first statement's printed beginning balance is not zero, so the balance in Actual equals the paper |
+| `value` | brokerage, retirement, education (529), cash management, mortgage | **one row per statement**: the change in the printed account value, dated the period end, plus the opening value. This is how Actual tracks an off-budget investment  |
+
+Value mode exists because summing a brokerage statement's cash legs does not reproduce its
+balance (market movement is not a transaction); the first import that tried it was off by several
+orders of magnitude. In the `_ALL` roll-up each change is measured from the **previous
+statement's** closing value, so a missing month cannot leave a gap in the balance; the memo says
+when a row covers such a gap. A quarterly or annual statement never shadows a monthly one for the
+same month.
+
+Fidelity statements are consolidated: one PDF lists several accounts in its "Accounts Included in
+This Report" table. The pipeline reads that table (row-major in the `pdftotext -layout` text) and
+gets one account per account number, whatever folder the PDF was filed in. Done in `accounts_in()`
+in `~/BGit/Bryan_git/Bryan_Arindom/bank_statements/import/_tools/parse_fidelity_accounts.py`, and
+value rows are built in `value_rows()` in `_tools/emit_personal.py` there.
 
 ### 11.6 What is never written
 
@@ -645,7 +667,8 @@ A row that fails is a pipeline bug, not a warning. The file is not written until
 
 Recorded here so nobody rediscovers them; each is a candidate for a fix in this repo.
 
-1. **Investment OFX with exactly one `INVBANKTRAN` crashes.** `getInvStmtTrn()` calls
+1. **Investment OFX with exactly one `INVBANKTRAN` crashed** — **fixed in this repo** on
+   2026-09-21, with a regression test in `ofx2json.test.ts`. `getInvStmtTrn()` calls
    `.flatMap()` on `INVTRANLIST.INVBANKTRAN`, but the XML library returns a single element as an
    object, not an array, so a one-transaction investment statement throws `flatMap is not a
    function` and the import fails with `Failed importing file`. The bank and card paths guard this

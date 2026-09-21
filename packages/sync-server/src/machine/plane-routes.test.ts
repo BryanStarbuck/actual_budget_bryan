@@ -104,6 +104,19 @@ describe('/capabilities is generated from the router, not a second list', () => 
 
   it('every mounted route actually answers rather than falling through', async () => {
     const key = arm();
+    // Engine-backed routes get the fake engine: this test is about the
+    // router, and loading the real @actual-app/api under vitest resolves
+    // loot-core's browser platform (indexedDB) instead of the node one.
+    setEngineForTests({
+      api: {
+        init: async () => ({ send: async () => [], getDataDir: () => tmp }),
+        shutdown: async () => undefined,
+        getBudgets: async () => [{ id: 'b1', name: 'Test Budget' }],
+        loadBudget: async () => undefined,
+      },
+      lib: { send: async () => [], getDataDir: () => tmp },
+      budget: { id: 'b1', name: 'Test Budget' },
+    });
     const agent = request(app());
 
     for (const def of ROUTES) {
@@ -328,6 +341,16 @@ describe('gate 4 — admin is not "write plus" (§6.1)', () => {
 describe('the leak canary (§16.2)', () => {
   it('no route leaks the key, a secret, or a home directory path', async () => {
     const key = arm({ ACTUAL_MACHINE_ALLOW_WRITE: '1' });
+    setEngineForTests({
+      api: {
+        init: async () => ({ send: async () => [], getDataDir: () => tmp }),
+        shutdown: async () => undefined,
+        getBudgets: async () => [{ id: 'b1', name: 'Test Budget' }],
+        loadBudget: async () => undefined,
+      },
+      lib: { send: async () => [], getDataDir: () => tmp },
+      budget: { id: 'b1', name: 'Test Budget' },
+    });
     const agent = request(app());
 
     for (const def of ROUTES) {

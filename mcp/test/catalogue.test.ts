@@ -127,7 +127,7 @@ describe('one array, no second list (§9.3)', () => {
   it('the counts are what the spec and the instructions block claim', () => {
     // The prompt file states these numbers to the model. If the catalogue
     // changes and the prompt does not, the model is told something false.
-    expect(TOOL_COUNTS).toEqual({ total: 33, read: 28, write: 5 });
+    expect(TOOL_COUNTS).toEqual({ total: 38, read: 31, write: 7 });
   });
 });
 

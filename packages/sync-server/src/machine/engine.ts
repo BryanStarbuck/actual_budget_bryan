@@ -70,7 +70,7 @@ type EngineApi = {
   }) => Promise<EngineLib>;
   shutdown: () => Promise<void>;
   getBudgets: () => Promise<
-    Array<{ id?: string; cloudFileId?: string; name: string }>
+    Array<{ id?: string; cloudFileId?: string; name: string; state?: 'remote' }>
   >;
   loadBudget: (budgetId: string) => Promise<unknown>;
 };
@@ -274,23 +274,6 @@ async function loadApi(): Promise<EngineApi | ApiLoadFailure> {
   }
 }
 
-/**
- * Open the budget named by `ACTUAL_MACHINE_BUDGET_ID`, or the only one there
- * is.
- *
- * "The only one there is" is a convenience with a hard edge: with two or more
- * budgets and no configured id, NOTHING is opened. Guessing which of an
- * operator's budgets to answer questions about is the single worst mistake
- * available on this plane (mcp.mdx §3), so the engine stays ready-with-no-
- * budget and every route that needs one says which ids exist.
- */
-type RemoteFile = {
-  fileId: string;
-  groupId: string;
-  name: string;
-  deleted: boolean;
-};
-
 /** The budgets this engine can reach: local directories plus the server's files. */
 export type KnownBudget = {
   id: string;
@@ -300,44 +283,42 @@ export type KnownBudget = {
   cloudFileId?: string;
 };
 
+/**
+ * `api.getBudgets()` already merges the two sources: a local budget has an
+ * `id` (its directory) and, once uploaded, a `cloudFileId`; a file that only
+ * exists on the sync server comes back with `state: 'remote'` and no `id`.
+ * The pairing is by cloudFileId, and a remote entry whose id a local one
+ * carries is the same budget, not a second one.
+ */
 async function listKnownBudgets(): Promise<KnownBudget[]> {
-  if (api === null || lib === null) {
+  if (api === null) {
     return [];
   }
-  const local = await api.getBudgets();
-  const out: KnownBudget[] = local
-    .filter(b => (b.id ?? b.cloudFileId) !== undefined)
-    .map(b => ({
-      id: (b.id ?? b.cloudFileId) as string,
-      name: b.name,
-      where: 'local' as const,
-      ...(b.cloudFileId ? { cloudFileId: b.cloudFileId } : {}),
-    }));
-
-  if (!server.connected) {
-    return out;
-  }
-
-  let remote: RemoteFile[] | null = null;
-  try {
-    remote = (await lib.send('get-remote-files')) as RemoteFile[] | null;
-  } catch (err) {
-    errors.caught('listing the sync server files', err);
-  }
-  for (const file of remote ?? []) {
-    if (file.deleted) {
-      continue;
-    }
-    const synced = out.find(b => b.cloudFileId === file.fileId);
-    if (synced) {
-      synced.where = 'both';
-    } else {
+  const files = (await api.getBudgets()) as Array<{
+    id?: string;
+    cloudFileId?: string;
+    name: string;
+    state?: 'remote';
+  }>;
+  const out: KnownBudget[] = [];
+  for (const f of files) {
+    if (f.id !== undefined) {
       out.push({
-        id: file.fileId,
-        name: file.name,
-        where: 'remote',
-        cloudFileId: file.fileId,
+        id: f.id,
+        name: f.name,
+        where: 'local',
+        ...(f.cloudFileId ? { cloudFileId: f.cloudFileId } : {}),
       });
+    }
+  }
+  for (const f of files) {
+    if (f.id === undefined && f.cloudFileId !== undefined) {
+      const synced = out.find(b => b.cloudFileId === f.cloudFileId);
+      if (synced) {
+        synced.where = 'both';
+      } else {
+        out.push({ id: f.cloudFileId, name: f.name, where: 'remote', cloudFileId: f.cloudFileId });
+      }
     }
   }
   return out;
@@ -444,8 +425,10 @@ export async function requireBudget(
       'not_ready',
       'No budget is open.',
       ids.length === 0
-        ? `no budget files were found in ${engineDataDir(env)}`
-        : `set ACTUAL_MACHINE_BUDGET_ID to one of: ${ids.map(b => b.id).join(', ')}`,
+        ? server.connected
+          ? 'no budget exists yet — POST /machine/v1/budgets to create one'
+          : `no budget files were found in ${engineDataDir(env)}, and the sync server is not bootstrapped so none can be shared — sign in to the web UI once to bootstrap it`
+        : `POST /machine/v1/budgets/{id}/load with one of: ${ids.map(b => `${b.id} (${b.name}, ${b.where})`).join(', ')}, or set ACTUAL_MACHINE_BUDGET_ID`,
     );
   }
   return { lib: engine, budget: openBudget };

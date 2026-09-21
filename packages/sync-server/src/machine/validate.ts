@@ -67,7 +67,13 @@ export type FieldSpec =
       maxLength?: number;
     }
   | { type: 'integer'; required?: boolean; min?: number; max?: number }
-  | { type: 'boolean'; required?: boolean };
+  | { type: 'boolean'; required?: boolean }
+  /**
+   * A list. Only the container is checked here; the route validates each
+   * item itself, because an item's shape (a transaction, an account) is the
+   * route's contract and belongs next to the code that consumes it.
+   */
+  | { type: 'array'; required?: boolean; maxItems?: number };
 
 /**
  * Build a validator from a flat field map.
@@ -179,6 +185,19 @@ function coerce(
         fail(`${name} must be at most ${field.max}.`, `lower ${name}`);
       }
       return value;
+    }
+
+    case 'array': {
+      if (!Array.isArray(raw)) {
+        fail(`${name} must be an array.`, `pass ${name} as a JSON array`);
+      }
+      if (field.maxItems !== undefined && raw.length > field.maxItems) {
+        fail(
+          `${name} has ${raw.length} items, over the cap of ${field.maxItems}.`,
+          `send ${name} in batches of at most ${field.maxItems}`,
+        );
+      }
+      return raw;
     }
 
     default:

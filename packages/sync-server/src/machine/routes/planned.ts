@@ -31,9 +31,9 @@ function notYet(phase: string): never {
 export const plannedRoutes: AnyRouteDef[] = [
   route({
     method: 'POST',
-    path: '/sync',
+    path: '/undo',
     tier: 'write',
-    summary: 'Sync with the sync server. NOT IMPLEMENTED YET (phase P3).',
+    summary: 'Undo the last change to the open budget. NOT IMPLEMENTED YET (phase P3).',
     status: 'planned',
     needsEngine: false,
     validate: takesNothing(),

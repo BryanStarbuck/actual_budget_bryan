@@ -1477,7 +1477,7 @@ left to a caller:
 | Option             | Default | **Ours**    | Why                                                                                                                                                                                                    |
 | ------------------ | ------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reimportDeleted`  | `true`  | **`false`** | The operator deleted that row on purpose. An import that resurrects deleted transactions on every run is an import nobody runs twice. Overridable per call, and the override is named in the response. |
-| `strictIdChecking` | `false` | **`true`**  | Loose matching lets two statement rows one day and one cent apart match each other. With real ids present, strict is correct and the fuzzy fallback is a liability.                                    |
+| `strictIdChecking` | `true`  | **`true`**  | Loose matching lets two statement rows one day and one cent apart match each other. With real ids present, strict is correct and the fuzzy fallback is a liability.                                    |
 | `defaultCleared`   | `true`  | `true`      | A row that appeared on a statement has cleared. That is what a statement is.                                                                                                                           |
 
 `imported_payee` carries the **raw** description, unmodified, and `notes` is **left alone** — it is

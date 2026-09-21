@@ -21,7 +21,7 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   ...BUDGET_TOOLS, // 6 read
   ...REFERENCE_TOOLS, // 4 read
   ...QUERY_TOOLS, // 2 read
-  ...STATEMENT_TOOLS, // 7 read + 1 write (ab_apply_statement_import)
+  ...STATEMENT_TOOLS, // 10 read + 3 write (ab_apply_accounts, ab_apply_file_import, ab_apply_statement_import)
   ...WRITE_TOOLS, // 4 write
 ]);
 

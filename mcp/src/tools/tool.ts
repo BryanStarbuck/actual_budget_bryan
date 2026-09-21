@@ -63,11 +63,11 @@ export const WHICH_SERVER =
   "This server is the operator's OWN Actual Budget install on this computer. " +
   'It is not company bookkeeping (`quickbooks`) and not a film project (`act3`).';
 
-/** The second clause, for the 28 tools that only read. */
+/** The second clause, for the 31 tools that only read. */
 export const READS_ONLY = 'Reads only.';
 
 /**
- * The second clause, for the 5 that do not.
+ * The second clause, for the 7 that do not.
  *
  * "Changes are synced to their other devices" is the real affordance and the
  * reason this sentence is not softened: a bad write is on the operator's phone
@@ -80,7 +80,7 @@ export const WRITES =
  * Assemble a description from its mandatory clauses.
  *
  * Going through one function is what lets a test assert all four are present
- * on all 33 tools, rather than hoping nobody pasted a description by hand.
+ * on all 38 tools, rather than hoping nobody pasted a description by hand.
  */
 export function describe(opts: {
   /** Clause 1 — what it does, in domain language, one sentence. */

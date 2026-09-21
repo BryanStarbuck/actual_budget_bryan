@@ -329,7 +329,234 @@ export const applyStatementImport: ToolDef = {
   },
 };
 
+// ---- the prepared-tree tools: manifest, account provisioning, one-file import ----
+// pm/mcp.mdx §11.1, pm/apis.mdx §11.4 and §12, pm/import_formats.mdx §11.
+
+const ROOT_FIELDS = {
+  root: {
+    type: 'string',
+    description:
+      'The statements root directory. Defaults to the configured one (actual_budget.statements.root in the credentials file).',
+  },
+  manifest_path: {
+    type: 'string',
+    description:
+      'The manifest CSV, relative to root. Defaults to import/personal/manifest_actual.csv.',
+  },
+} as const;
+
+const rootSchema = {
+  root: z.string().optional(),
+  manifest_path: z.string().optional(),
+};
+
+export const getStatementManifest: ToolDef = {
+  name: 'ab_get_statement_manifest',
+  route: { method: 'GET', path: '/ingest/manifest' },
+  tier: 'read',
+  description: describe({
+    what: 'Reads the statement archive\'s manifest: one row per account with its institution, kind, last four digits, import group, coverage, and the absolute path of the combined OFX file to import. Call this first before any statement import.',
+    tier: 'read',
+    insteadOf:
+      'Rows whose import_group is "confirm" are personal accounts the operator wants asked about before importing. Rows for business entities are never imported here.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: { ...ROOT_FIELDS },
+    additionalProperties: false,
+  },
+  schema: z.object(rootSchema).strip(),
+  async run(args, ctx) {
+    const res = await ctx.client.request('/ingest/manifest', {
+      query: args as Record<string, string | undefined>,
+    });
+    return { data: res.data, untrusted: ['path', 'label', 'institution', 'entity'] };
+  },
+};
+
+export const planAccounts: ToolDef = {
+  name: 'ab_plan_accounts',
+  route: { method: 'POST', path: '/ingest/accounts/plan' },
+  tier: 'read',
+  description: describe({
+    what: 'For every manifest row, decides create / link / ambiguous against the budget\'s existing accounts, with the reasoning and the on-budget or off-budget decision (brokerage, retirement and loans are off-budget). Creates nothing. Returns a confirm_token.',
+    tier: 'read',
+    insteadOf:
+      'Show the operator the plan before ab_apply_accounts. An ambiguous row is never created — ask which existing account it is.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...ROOT_FIELDS,
+      import_group: {
+        type: 'string',
+        description:
+          'Only manifest rows in this import group, e.g. "import". Omit for every row.',
+      },
+      naming: {
+        type: 'string',
+        description:
+          'Account name template. Placeholders: {Institution} {Account} {Kind} {last4} {Entity} {label}. Defaults to "{Institution} {Account}", e.g. "Northbank Checking ••4021".',
+      },
+      on_budget_kinds: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Which manifest kinds are on-budget. Defaults to checking, savings, card.',
+      },
+    },
+    additionalProperties: false,
+  },
+  schema: z
+    .object({
+      ...rootSchema,
+      import_group: z.string().optional(),
+      naming: z.string().optional(),
+      on_budget_kinds: z.array(z.string()).optional(),
+    })
+    .strip(),
+  async run(args, ctx) {
+    const res = await ctx.client.request('/ingest/accounts/plan', {
+      method: 'POST',
+      body: args,
+    });
+    return { data: res.data, untrusted: ['name', 'label', 'reason'] };
+  },
+};
+
+export const applyAccounts: ToolDef = {
+  name: 'ab_apply_accounts',
+  route: { method: 'POST', path: '/ingest/accounts/apply' },
+  tier: 'write',
+  description: describe({
+    what: 'Creates the accounts an ab_plan_accounts plan decided to create, and reports the ones it linked to existing accounts. Ambiguous rows are never created.',
+    tier: 'write',
+    insteadOf:
+      'Run ab_plan_accounts first and show the operator the plan; this needs its confirm_token, and the plan is recomputed here and must still match.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      confirm: {
+        type: 'string',
+        description: 'The confirm_token returned by ab_plan_accounts.',
+      },
+      dry_run: {
+        type: 'boolean',
+        description:
+          'Defaults to TRUE. Must be explicitly false to create anything.',
+      },
+    },
+    required: ['confirm'],
+    additionalProperties: false,
+  },
+  schema: z.object({ confirm: z.string().min(1), dry_run: z.boolean().optional() }).strip(),
+  async run(args, ctx) {
+    const a = args as { confirm: string; dry_run?: boolean };
+    const res = await ctx.client.request('/ingest/accounts/apply', {
+      method: 'POST',
+      body: { confirm_token: a.confirm, dry_run: a.dry_run ?? true },
+    });
+    return { data: res.data, untrusted: ['name', 'label'] };
+  },
+};
+
+export const planFileImport: ToolDef = {
+  name: 'ab_plan_file_import',
+  route: { method: 'POST', path: '/ingest/file/plan' },
+  tier: 'read',
+  description: describe({
+    what: 'Parses one OFX/QFX (or CAMT XML) file with the app\'s own parser and runs its importer as a dry run against one account: how many rows the file holds, how many would be added, updated, or are already there. Returns a confirm_token. Changes nothing.',
+    tier: 'read',
+    insteadOf:
+      'ALWAYS run this before ab_apply_file_import and show the operator the counts. Import the account\'s _ALL_actual.ofx, not the per-month files. CSV and QIF are refused because they carry no imported_id and would de-duplicate only by fuzzy match.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      account_id: {
+        type: 'string',
+        description: 'The budget account to import into, from ab_list_accounts or ab_apply_accounts.',
+      },
+      path: {
+        type: 'string',
+        description: 'Absolute path of the .ofx / .qfx / .xml file, e.g. the combined_ofx_absolute from ab_get_statement_manifest.',
+      },
+      max_changes: {
+        type: 'integer',
+        description:
+          'Refuse if the import would add or update more rows than this. Defaults to the server ceiling (200); a first import of a whole account needs the real row count here.',
+      },
+      import_notes: {
+        type: 'boolean',
+        description: 'Carry the OFX MEMO into notes on new rows. Defaults to true. An existing note is never overwritten.',
+      },
+    },
+    required: ['account_id', 'path'],
+    additionalProperties: false,
+  },
+  schema: z
+    .object({
+      account_id: z.string().min(1),
+      path: z.string().min(1),
+      max_changes: z.number().int().positive().optional(),
+      import_notes: z.boolean().optional(),
+    })
+    .strip(),
+  async run(args, ctx) {
+    const res = await ctx.client.request('/ingest/file/plan', {
+      method: 'POST',
+      body: args,
+      noTimeout: true,
+    });
+    return { data: res.data, untrusted: ['file', 'name'] };
+  },
+};
+
+export const applyFileImport: ToolDef = {
+  name: 'ab_apply_file_import',
+  route: { method: 'POST', path: '/ingest/file/apply' },
+  tier: 'write',
+  description: describe({
+    what: 'Imports the file an ab_plan_file_import token was issued for, through the app\'s own importer, then syncs the budget so the browser sees it.',
+    tier: 'write',
+    insteadOf:
+      'Run ab_plan_file_import first; this needs its confirm_token. The plan is recomputed here, and if the file or the ledger changed since, this refuses rather than importing something the operator did not see. After applying, run ab_plan_file_import again: it must report 0 to add.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      confirm: {
+        type: 'string',
+        description: 'The confirm_token returned by ab_plan_file_import for this exact file.',
+      },
+      dry_run: {
+        type: 'boolean',
+        description:
+          'Defaults to TRUE. Must be explicitly false to import anything.',
+      },
+    },
+    required: ['confirm'],
+    additionalProperties: false,
+  },
+  schema: z.object({ confirm: z.string().min(1), dry_run: z.boolean().optional() }).strip(),
+  async run(args, ctx) {
+    const a = args as { confirm: string; dry_run?: boolean };
+    const res = await ctx.client.request('/ingest/file/apply', {
+      method: 'POST',
+      body: { confirm_token: a.confirm, dry_run: a.dry_run ?? true },
+      noTimeout: true,
+    });
+    return { data: res.data, untrusted: ['file', 'name'] };
+  },
+};
+
 export const STATEMENT_TOOLS = [
+  getStatementManifest,
+  planAccounts,
+  applyAccounts,
+  planFileImport,
+  applyFileImport,
   scanStatements,
   listMissingStatements,
   extractStatements,
