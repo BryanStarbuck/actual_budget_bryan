@@ -10,6 +10,7 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Error as ErrorAlert } from '#components/alerts';
 import { Link } from '#components/common/Link';
@@ -22,6 +23,10 @@ import {
 import { FormField, FormLabel } from '#components/forms';
 import type { Modal as ModalType } from '#modals/modalsSlice';
 import { getSecretsError } from '#util/error';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/EnableBankingInitialiseModal.tsx',
+);
 
 type EnableBankingInitialiseProps = Extract<
   ModalType,
@@ -50,7 +55,8 @@ export function EnableBankingInitialiseModal({
       setSecretKey(text);
       setKeyFileName(file.name);
       setIsValid(true);
-    } catch {
+    } catch (e) {
+      errors.caught('reading the Enable Banking key file', e);
       setSecretKey('');
       setKeyFileName('');
       setIsValid(false);
@@ -97,7 +103,8 @@ export function EnableBankingInitialiseModal({
       setIsValid(true);
       onSuccess();
       close();
-    } catch {
+    } catch (e) {
+      errors.caught('configuring Enable Banking', e);
       setIsValid(false);
       setError(
         t(

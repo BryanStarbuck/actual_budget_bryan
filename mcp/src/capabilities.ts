@@ -12,6 +12,9 @@
  * that cannot work.
  */
 import type { MachinePlaneClient } from './client.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('mcp/src/capabilities.ts');
 
 /**
  * - `live`    — the app implements it; go.
@@ -109,10 +112,11 @@ export class CapabilityCache {
       this.#value = parse(res.data);
       this.#fetchedAt = Date.now();
       return this.#value;
-    } catch {
+    } catch (e) {
       // Best effort. A failure here must never stop the server starting or a
       // tool running: the tool's own call will produce the real diagnosis
       // (not_ready, unauthorized) with a better message than we could.
+      errors.expected('reading the machine-plane route table', e);
       return null;
     }
   }

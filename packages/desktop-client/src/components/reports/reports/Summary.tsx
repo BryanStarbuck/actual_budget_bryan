@@ -21,6 +21,7 @@ import type {
   SummaryWidget,
   TimeFrame,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection, tryOr } from '@actual-app/error-file';
 import { parseISO } from 'date-fns';
 
 import { EditablePageHeaderTitle } from '#components/EditablePageHeaderTitle';
@@ -47,6 +48,10 @@ import { useSyncedPref } from '#hooks/useSyncedPref';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
 import { useUpdateDashboardWidgetMutation } from '#reports/mutations';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/reports/Summary.tsx',
+);
 
 export function Summary() {
   const params = useParams();
@@ -85,19 +90,17 @@ function SummaryInner({ widget }: SummaryInnerProps) {
 
   const [content, setContent] = useState<SummaryContent>(
     widget?.meta?.content
-      ? (() => {
-          try {
-            return JSON.parse(widget.meta.content);
-          } catch (error) {
-            console.error('Failed to parse widget meta content:', error);
-            return {
-              type: 'sum',
-              divisorAllTimeDateRange: false,
-              divisorConditions: [],
-              divisorConditionsOp: 'and',
-            };
-          }
-        })()
+      ? tryOr(
+          errors,
+          'parsing the summary widget settings',
+          () => JSON.parse(widget.meta.content),
+          {
+            type: 'sum',
+            divisorAllTimeDateRange: false,
+            divisorConditions: [],
+            divisorConditionsOp: 'and',
+          },
+        )
       : {
           type: 'sum',
           divisorAllTimeDateRange: false,
@@ -204,7 +207,7 @@ function SummaryInner({ widget }: SummaryInnerProps) {
 
       setAllMonths(allMonths);
     }
-    void run();
+    reportRejection(errors, 'loading the summary month range', run());
   }, [locale]);
 
   useEffect(() => {

@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as db from '#server/db';
 // @ts-strict-ignore
 import * as monthUtils from '#shared/months';
@@ -6,6 +8,8 @@ import type { CleanupTemplate } from '#types/models/cleanup-templates';
 import { getSheetValue, setBudget, setGoal } from './actions';
 import { storeNoteCleanups } from './cleanup-template-notes';
 import type { TemplateNotification } from './template-notification';
+
+const errors = errorFileFor('loot-core/src/server/budget/cleanup-template.ts');
 
 export async function cleanupTemplate({ month }: { month: string }) {
   await storeNoteCleanups();
@@ -369,7 +373,8 @@ function parseCleanupDef(
   try {
     const parsed = JSON.parse(raw) as CleanupTemplate[];
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
-  } catch {
+  } catch (e) {
+    errors.expected('parsing a stored cleanup definition', e);
     return null;
   }
 }

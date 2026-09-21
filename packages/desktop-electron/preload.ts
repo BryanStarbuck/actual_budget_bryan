@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('Actual', {
   IS_DEV,
   ACTUAL_VERSION: VERSION,
   logToTerminal: console.log,
+  // pm/error_err.mdx §7 N15: the renderer's error records go to the main process's error file.
+  reportErrors: (body: { app: string; events: unknown[] }) => {
+    ipcRenderer.send('error-report', body);
+  },
   ipcConnect: (
     func: (payload: {
       on: IpcRenderer['on'];

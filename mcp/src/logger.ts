@@ -15,6 +15,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('mcp/src/logger.ts');
+
 const ROTATE_BYTES = 8 * 1024 * 1024;
 const GENERATIONS = 5;
 
@@ -38,8 +42,9 @@ function rotateIfNeeded(file: string): void {
       }
     }
     fs.renameSync(file, `${file}.1`);
-  } catch {
+  } catch (e) {
     // Swallowed: a rotation that fails is a bigger file, not a dead server.
+    errors.caught('rotating the MCP log file', e);
   }
 }
 
@@ -63,8 +68,9 @@ export class Logger {
       const file = path.join(this.#dir, name);
       rotateIfNeeded(file);
       fs.appendFileSync(file, `${line}\n`, { mode: 0o600 });
-    } catch {
+    } catch (e) {
       // See above.
+      errors.caught('appending to the MCP log file', e, { file: name });
     }
   }
 

@@ -42,6 +42,8 @@
     "actual/prefer-subpath-imports": "error",
     "actual/enforce-boundaries": "error",
     "actual/no-extraneous-dependencies": "error",
+    // pm/error_err.mdx §12.1 — "warn" during the Phase C rollout (§15.2 step 5); flips to "error" in Phase D.
+    "actual/catch-must-report": "warn",
 
     // JSX A11y rules
     "jsx-a11y/no-autofocus": [
@@ -398,6 +400,30 @@
       "files": ["packages/eslint-plugin-actual/lib/rules/__tests__/**/*"],
       "rules": {
         "actual/enforce-boundaries": "off"
+      }
+    },
+    {
+      // pm/error_err.mdx §12.3 — files that are not product code: tests, fixtures, generated output,
+      // tooling packages, the vendored library copies, and the error-file library itself (R11).
+      "files": [
+        "**/*.test.{js,ts,jsx,tsx,mjs,cjs,mts}",
+        "**/*.spec.{js,ts,jsx,tsx,mjs,cjs,mts}",
+        "**/*.stories.{js,ts,jsx,tsx}",
+        "**/__tests__/**/*",
+        "**/__mocks__/**/*",
+        "**/e2e/**/*",
+        "**/mocks/**/*",
+        "packages/docs/**/*",
+        "packages/component-library/src/icons/**/*",
+        "packages/eslint-plugin-actual/**/*",
+        "packages/ci-actions/**/*",
+        "packages/vite-plugin-peggy/**/*",
+        "packages/crdt/src/proto/**/*",
+        "**/vendor/error-file/**/*",
+        "packages/error-file/src/**/*"
+      ],
+      "rules": {
+        "actual/catch-must-report": "off"
       }
     },
     {

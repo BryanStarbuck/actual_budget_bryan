@@ -2,11 +2,16 @@
 import * as fs from 'fs';
 import { join } from 'path';
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as lootFs from '#platform/server/fs';
-import { logger } from '#platform/server/log';
 import type { GlobalPrefsJson } from '#types/prefs';
 
 import type * as T from './index-types';
+
+const errors = errorFileFor(
+  'loot-core/src/platform/server/asyncStorage/index.electron.ts',
+);
 
 const getStorePath = () => join(lootFs.getDataDir(), 'global-store.json');
 let store: GlobalPrefsJson;
@@ -37,8 +42,10 @@ function loadStore(storePath: string): GlobalPrefsJson {
   } catch (err) {
     // No store yet (first run) - start fresh. Anything other than a missing
     // file is unexpected, so surface it but still fall back to defaults.
-    if (err?.code !== 'ENOENT') {
-      logger.error('Could not read global preferences, using defaults', err);
+    if (err?.code === 'ENOENT') {
+      errors.expected('reading the optional global preferences store', err);
+    } else {
+      errors.caught('reading the global preferences store', err);
     }
     return {};
   }
@@ -62,13 +69,15 @@ function loadStore(storePath: string): GlobalPrefsJson {
     const backupPath = `${storePath}.corrupt`;
     try {
       fs.writeFileSync(backupPath, contents, 'utf8');
-      logger.error(
-        `Could not parse global preferences at ${storePath}; backed up the corrupt file to ${backupPath} and started with defaults`,
-        err,
-      );
+      errors.caught('parsing the global preferences store', err, {
+        backedUp: true,
+      });
     } catch (backupErr) {
-      logger.error(
-        `Could not parse global preferences at ${storePath}, and failed to back up the corrupt file; starting with defaults`,
+      errors.caught('parsing the global preferences store', err, {
+        backedUp: false,
+      });
+      errors.caught(
+        'backing up the corrupt global preferences store',
         backupErr,
       );
     }
@@ -105,8 +114,10 @@ async function writeStore(): Promise<void> {
     // been created).
     try {
       await fs.promises.rm(tmpPath, { force: true });
-    } catch {}
-    throw err;
+    } catch (rmErr) {
+      errors.expected('removing the temporary global preferences file', rmErr);
+    }
+    errors.rethrow('writing the global preferences store', err);
   }
 }
 

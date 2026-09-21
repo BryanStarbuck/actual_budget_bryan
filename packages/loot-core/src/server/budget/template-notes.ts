@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import type { RefillTemplate, Template } from '#types/models/templates';
 
 import { storeTemplates } from './goal-template';
@@ -9,6 +11,8 @@ import {
 } from './statements';
 import type { CategoryWithTemplateNote } from './statements';
 import type { TemplateNotification } from './template-notification';
+
+const errors = errorFileFor('loot-core/src/server/budget/template-notes.ts');
 
 export const TEMPLATE_PREFIX = '#template';
 export const GOAL_PREFIX = '#goal';
@@ -132,6 +136,9 @@ async function getCategoriesWithTemplates(
           description ? { ...parsedTemplate, description } : parsedTemplate,
         );
       } catch (e: unknown) {
+        // A malformed template line is reported back to the user as an
+        // error template, so it is an answer rather than a fault (R7).
+        errors.expected('parsing a template note line', e);
         const errorTemplate: Template = {
           type: 'error',
           directive: 'error',

@@ -1,6 +1,7 @@
 // @ts-strict-ignore
 
-import { logger } from '#platform/server/log';
+import { errorFileFor } from '@actual-app/error-file';
+
 import { aqlQuery, schemaConfig } from '#server/aql';
 import * as db from '#server/db';
 import {
@@ -49,6 +50,10 @@ import type {
 } from '#types/models';
 
 import { batchUpdateTransactions } from '.';
+
+const errors = errorFileFor(
+  'loot-core/src/server/transactions/transaction-rules.ts',
+);
 
 // TODO: Detect if it looks like the user is creating a rename rule
 // and prompt to create it in the pre phase instead
@@ -172,11 +177,11 @@ export function makeRule(data) {
   try {
     rule = new Rule(ruleModel.toJS(data));
   } catch (e) {
-    logger.warn('Invalid rule', e);
     if (e instanceof RuleError) {
+      errors.warn('building a rule from its stored definition', e);
       return null;
     }
-    throw e;
+    errors.rethrow('building a rule from its stored definition', e);
   }
 
   // This is needed because we map ids on the fly, and they might
@@ -471,7 +476,7 @@ export function conditionsToAQL(
   conditions,
   { recurDateBounds = 100, applySpecialCases = true } = {},
 ) {
-  const errors = [];
+  const conditionErrors = [];
 
   conditions = conditions
     .map(cond => {
@@ -482,8 +487,8 @@ export function conditionsToAQL(
       try {
         return new Condition(cond.op, cond.field, cond.value, cond.options);
       } catch (e) {
-        errors.push(e.type || 'internal');
-        logger.log('conditionsToAQL: invalid condition: ' + e.message);
+        conditionErrors.push(e.type || 'internal');
+        errors.expected('parsing a rule condition', e);
         return null;
       }
     })
@@ -738,7 +743,7 @@ export function conditionsToAQL(
   };
 
   const filters = conditions.map(mapConditionToActualQL);
-  return { filters, errors };
+  return { filters, errors: conditionErrors };
 }
 
 export async function applyActions(
@@ -774,7 +779,7 @@ export async function applyActions(
           action.options,
         );
       } catch (e) {
-        logger.log('Action error', e);
+        errors.expected('parsing a rule action', e);
         return null;
       }
     })

@@ -1,3 +1,4 @@
+import { errorFileFor, guard } from '@actual-app/error-file';
 import type { Database } from '@jlongster/sql.js';
 // @ts-strict-ignore
 import * as dateFns from 'date-fns';
@@ -10,6 +11,8 @@ import * as cloudStorage from '#server/cloud-storage';
 import * as prefs from '#server/prefs';
 import { safeUnzip, safeZip } from '#server/util/zip';
 import * as monthUtils from '#shared/months';
+
+const errors = errorFileFor('loot-core/src/server/budgetfiles/backups.ts');
 
 // A special backup that represents the latest version of the db that
 // can be reverted to after loading a backup
@@ -204,10 +207,13 @@ export async function loadBackup(id: string, backupId: string) {
     await fs.removeFile(fs.join(budgetDir, LATEST_BACKUP_FILENAME));
     await fs.removeFile(fs.join(budgetDir, 'metadata.latest.json'));
 
-    // Re-upload the new file
+    // Re-upload the new file. Best effort: an offline user can still
+    // revert to the latest version.
     try {
       await cloudStorage.upload();
-    } catch {}
+    } catch (e) {
+      errors.warn('re-uploading the budget after reverting a backup', e);
+    }
     prefs.unloadPrefs();
   } else {
     logger.log('Loading backup', backupId);
@@ -223,10 +229,13 @@ export async function loadBackup(id: string, backupId: string) {
       lastUploaded: null,
     });
 
-    // Re-upload the new file
+    // Re-upload the new file. Best effort: an offline user can still
+    // load a backup.
     try {
       await cloudStorage.upload();
-    } catch {}
+    } catch (e) {
+      errors.warn('re-uploading the budget after loading a backup', e);
+    }
 
     prefs.unloadPrefs();
 
@@ -239,7 +248,7 @@ export async function loadBackup(id: string, backupId: string) {
     try {
       entries = safeUnzip(zipContent);
     } catch (e) {
-      logger.log(e);
+      errors.caught('unzipping the backup file', e);
       throw new Error('Error reading backup zip file');
     }
     if (!entries['db.sqlite'] || !entries['metadata.json']) {
@@ -261,10 +270,10 @@ export function startBackupService(id: string) {
 
   // Make a backup every 15 minutes
   serviceInterval = setInterval(
-    async () => {
+    guard(errors, 'making the scheduled backup', async () => {
       logger.log('Making backup');
       await makeBackup(id);
-    },
+    }),
     1000 * 60 * 15,
   );
 }

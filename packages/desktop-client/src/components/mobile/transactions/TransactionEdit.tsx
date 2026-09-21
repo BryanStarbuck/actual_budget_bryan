@@ -64,6 +64,7 @@ import type {
   PayeeEntity,
   TransactionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import {
   format as formatDate,
   isValid as isValidDate,
@@ -112,6 +113,10 @@ import {
 
 import { AmountInput } from './AmountInput';
 import { SplitAmountInput } from './SplitAmountInput';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/transactions/TransactionEdit.tsx',
+);
 
 function getFieldName(transactionId: TransactionEntity['id'], field: string) {
   return `${field}-${transactionId}`;
@@ -824,7 +829,8 @@ const TransactionEditInner = memo<TransactionEditInnerProps>(
       const createSchedule = async () => {
         try {
           await createSingleTimeScheduleFromTransaction(transactionForSchedule);
-        } catch {
+        } catch (e) {
+          errors.caught('creating a schedule from a transaction', e);
           dispatch(
             addNotification({
               notification: {
@@ -846,7 +852,12 @@ const TransactionEditInner = memo<TransactionEditInnerProps>(
               id: unserializedTransaction.id,
             });
           }
-        } catch {
+        } catch (e) {
+          errors.caught(
+            'deleting the original transaction after creating its schedule',
+            e,
+            { id: unserializedTransaction.id },
+          );
           dispatch(
             addNotification({
               notification: {
@@ -907,7 +918,11 @@ const TransactionEditInner = memo<TransactionEditInnerProps>(
         value: TransactionEntity[Field],
       ) => {
         const newTransaction = { ...serializedTransaction, [name]: value };
-        onUpdate(newTransaction, name);
+        reportRejection(
+          errors,
+          'applying a transaction field change',
+          onUpdate(newTransaction, name),
+        );
         onClearActiveEdit();
 
         if (name === 'account') {
@@ -1629,7 +1644,11 @@ function TransactionEditUnconnected({
       }
     }
     if (transactionId !== 'new') {
-      void fetchTransaction();
+      reportRejection(
+        errors,
+        'loading a transaction to edit',
+        fetchTransaction(),
+      );
     } else {
       isAdding.current = true;
     }
@@ -1870,7 +1889,7 @@ function TransactionEditUnconnected({
         setShouldShowSaveLocation(false);
       }
     } catch (error) {
-      console.error('Failed to save location', { error });
+      errors.caught('saving a payee location', error);
       dispatch(
         addNotification({
           notification: {
@@ -1892,7 +1911,11 @@ function TransactionEditUnconnected({
       ...serializeTransaction(transaction, dateFormat),
       payee: nearestPayee.id,
     };
-    void onUpdate(updated, 'payee');
+    reportRejection(
+      errors,
+      'applying the nearest payee to a transaction',
+      onUpdate(updated, 'payee'),
+    );
   }, [transactions, nearestPayee, onUpdate, dateFormat]);
 
   if (accounts.length === 0) {

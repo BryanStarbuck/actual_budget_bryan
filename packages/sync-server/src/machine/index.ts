@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 import type { Request, Response } from 'express';
 
@@ -48,6 +49,8 @@ import { MAX_BODY_BYTES, planeRoutes } from './routes/plane.js';
 import { plannedRoutes } from './routes/planned.js';
 import { assertTier, grantsFromEnv } from './tier.js';
 import type { TierGrants } from './tier.js';
+
+const errors = errorFileFor('sync-server/src/machine/index.ts');
 
 export type MachinePlaneInfo = {
   keyFingerprint: string;
@@ -106,8 +109,9 @@ function readServerVersion(): string {
       }
       dir = parent;
     }
-  } catch {
+  } catch (err) {
     // Fall through — a version is a nicety and must never stop the plane.
+    errors.expected('reading the sync-server version from package.json', err);
   }
   return process.env.npm_package_version ?? 'unknown';
 }
@@ -200,7 +204,14 @@ function handlerFor(def: AnyRouteDef) {
         ...meta,
       });
     } catch (err) {
-      sendError(res, toMachineError(err));
+      const machineError = toMachineError(err);
+      // pm/error_err.mdx §7 N11: only an `internal` is a fault; a gate refusal is an answer (R7).
+      if (machineError.code === 'internal') {
+        errors.caught(`handling ${def.method} ${def.path}`, err);
+      } else {
+        errors.expected(`handling ${def.method} ${def.path}`, err);
+      }
+      sendError(res, machineError);
     }
   };
 }

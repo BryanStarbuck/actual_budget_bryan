@@ -1,5 +1,7 @@
 import { join, resolve } from 'node:path';
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import { bootstrapOpenId } from './accounts/openid';
 import {
   bootstrapPassword,
@@ -11,6 +13,8 @@ import {
 } from './accounts/password';
 import { openDatabase } from './db';
 import { config } from './load-config';
+
+const errors = errorFileFor('sync-server/src/account-db.js');
 
 let _accountDb;
 
@@ -142,7 +146,7 @@ export async function bootstrap(loginSettings, forced = false) {
     return passEnabled ? await loginWithPassword(loginSettings.password) : {};
   } catch (error) {
     accountDb.mutate('ROLLBACK');
-    throw error;
+    errors.rethrow('bootstrapping the login settings', error);
   }
 }
 
@@ -213,7 +217,7 @@ export async function disableOpenID(loginSettings) {
       accountDb.mutate('DELETE FROM auth WHERE method = ?', ['openid']);
     });
   } catch (err) {
-    console.error('Error cleaning up openid information:', err);
+    errors.caught('clearing the users and sessions while enabling OpenID', err);
     return { error: 'database-error' };
   }
 }

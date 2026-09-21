@@ -10,6 +10,7 @@ import type { NavigateFunction } from 'react-router';
 
 import { send } from '@actual-app/core/platform/client/connection';
 import { q } from '@actual-app/core/shared/query';
+import { installBrowserErrorFile } from '@actual-app/error-file/browser';
 import { bindActionCreators } from '@reduxjs/toolkit';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -27,6 +28,16 @@ import { configureAppStore } from './redux/store';
 import * as transactionsSlice from './transactions/transactionsSlice';
 import { redo, undo } from './undo';
 import * as usersSlice from './users/usersSlice';
+
+// pm/error_err.mdx §7 N1 / N15: the tab's error file. In Electron the preload exposes
+// `reportErrors`, and records travel over IPC to the main process instead of HTTP.
+const reportErrors = window.Actual?.reportErrors;
+installBrowserErrorFile({
+  app: reportErrors ? 'electron-renderer' : 'web',
+  where: 'desktop-client/src/index.tsx',
+  echo: import.meta.env.DEV,
+  ...(reportErrors ? { transport: reportErrors } : {}),
+});
 
 const queryClient = new QueryClient();
 window.__TANSTACK_QUERY_CLIENT__ = queryClient;

@@ -8,6 +8,11 @@ import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { LazyLoadFailedError } from '@actual-app/core/shared/errors';
 import { retry as promiseRetry } from '@actual-app/core/shared/retry';
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/util/LoadComponent.tsx',
+);
 
 type ProplessComponent = ComponentType<Record<string, never>>;
 type LoadComponentProps<K extends string> = {
@@ -49,6 +54,7 @@ function LoadComponentInner<K extends string>({
         retries: 5,
       },
     ).catch(e => {
+      errors.caught('loading a lazy component', e, { component: name });
       if (!isUnmounted) {
         setError(e);
       }

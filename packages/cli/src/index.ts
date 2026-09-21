@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+import { installNodeErrorFile } from '@actual-app/error-file/node';
 import { Command, Option } from 'commander';
 
 import { registerAccountsCommand } from './commands/accounts';
@@ -15,6 +17,10 @@ import { registerTransactionsCommand } from './commands/transactions';
 import { parseNonNegativeIntFlag } from './utils';
 
 declare const __CLI_VERSION__: string;
+
+// pm/error_err.mdx §7 N17: the process-level net, first thing at the entry.
+installNodeErrorFile({ app: 'actual-cli', where: 'cli/src/index.ts' });
+const errors = errorFileFor('cli/src/index.ts');
 
 const program = new Command();
 
@@ -75,7 +81,9 @@ function normalizeThrownMessage(err: unknown): string {
   if (typeof err === 'object' && err !== null) {
     try {
       return JSON.stringify(err);
-    } catch {
+    } catch (stringifyError) {
+      // a circular or otherwise unserialisable object: the placeholder is the answer
+      errors.expected('serialising a thrown value for stderr', stringifyError);
       return '<non-serializable error>';
     }
   }
@@ -83,6 +91,9 @@ function normalizeThrownMessage(err: unknown): string {
 }
 
 program.parseAsync(process.argv).catch((err: unknown) => {
+  errors.fatal('running the actual CLI', err, {
+    command: process.argv[2] ?? '',
+  });
   const message = normalizeThrownMessage(err);
   process.stderr.write(`Error: ${message}\n`);
   process.exitCode = 1;

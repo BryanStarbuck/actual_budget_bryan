@@ -1,5 +1,3 @@
-// @ts-strict-ignore
-// TODO: remove strict
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -25,6 +23,9 @@ import type {
   TransactionEntity,
   TransactionFilterEntity,
 } from '@actual-app/core/types/models';
+// @ts-strict-ignore
+// TODO: remove strict
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import type { TableHandleRef } from '#components/table';
@@ -39,6 +40,14 @@ import { useDispatch } from '#redux';
 import { shouldApplyRuleChange } from './table/utils';
 import { TransactionTable } from './TransactionsTable';
 import type { TransactionTableProps } from './TransactionsTable';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/transactions/TransactionList.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering the transaction list',
+);
 // When data changes, there are two ways to update the UI:
 //
 // * Optimistic updates: we apply the needed updates to local data
@@ -512,7 +521,10 @@ export function TransactionList({
   );
 
   return (
-    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={FeatureErrorFallback}
+    >
       <TransactionTable
         ref={tableRef}
         transactions={allTransactions}

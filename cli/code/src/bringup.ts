@@ -22,6 +22,9 @@ import path from 'node:path';
 import { CliError, Exit } from './exit.js';
 import { stateDir } from './logger.js';
 import type { Spinner } from './progress.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('cli/code/src/bringup.ts');
 
 const DEFAULT_PORT = 5006;
 
@@ -37,7 +40,8 @@ export function portOf(baseUrl: string): number {
   try {
     const port = new URL(baseUrl).port;
     return port === '' ? DEFAULT_PORT : Number(port);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the target base URL', e);
     return DEFAULT_PORT;
   }
 }
@@ -65,7 +69,9 @@ export async function probeHealth(baseUrl: string): Promise<boolean> {
     }
     const body = (await response.json()) as { status?: string };
     return body.status === 'UP';
-  } catch {
+  } catch (e) {
+    // A probe: the app being down is the question, not a fault.
+    errors.expected('probing the sync server health', e);
     return false;
   }
 }
@@ -98,13 +104,15 @@ export function portHolder(port: number): PortHolder | null {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
-    } catch {
+    } catch (e) {
       // A pid we cannot name is still a pid we must not kill.
+      errors.expected('naming the process holding the port', e);
     }
 
     return { pid, command };
-  } catch {
+  } catch (e) {
     // lsof exits non-zero when nothing holds the port.
+    errors.expected('finding the holder of the port', e);
     return null;
   }
 }
@@ -119,7 +127,9 @@ function ourRecordedPid(env: NodeJS.ProcessEnv): number | null {
     }
     process.kill(pid, 0);
     return pid;
-  } catch {
+  } catch (e) {
+    // No pid file, or the recorded process is gone: both mean "not ours".
+    errors.expected('reading the recorded server pid', e);
     return null;
   }
 }
@@ -202,13 +212,18 @@ function startDetached(repoRoot: string, env: NodeJS.ProcessEnv): void {
   const dir = stateDir(env);
   fs.mkdirSync(dir, { recursive: true });
 
+  // Budget data must never land inside the repo: the sync server defaults
+  // ACTUAL_DATA_DIR to its cwd. Same location as the justfile's `data`.
+  const dataDir = env.ACTUAL_DATA_DIR ?? path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+
   const log = fs.openSync(serverLogPath(env), 'a');
   try {
     const child = spawn('yarn', ['start:server'], {
       cwd: repoRoot,
       detached: true,
       stdio: ['ignore', log, log],
-      env: { ...env },
+      env: { ...env, ACTUAL_DATA_DIR: dataDir },
     });
     child.unref();
 
@@ -224,7 +239,8 @@ export function tailLog(env: NodeJS.ProcessEnv, lines: number): string {
   try {
     const contents = fs.readFileSync(serverLogPath(env), 'utf8');
     return contents.split('\n').slice(-lines).join('\n');
-  } catch {
+  } catch (e) {
+    errors.expected('reading the optional server.log', e);
     return '(no server.log yet)';
   }
 }
@@ -244,17 +260,20 @@ export function stopServer(
       // gave us — the server spawns children and killing only the parent
       // leaves them holding the port.
       process.kill(-pid, 'SIGTERM');
-    } catch {
+    } catch (e) {
+      errors.expected('signalling the server process group', e);
       try {
         process.kill(pid, 'SIGTERM');
-      } catch {
+      } catch (inner) {
         // Already gone.
+        errors.expected('signalling the server process', inner);
       }
     }
     try {
       fs.unlinkSync(serverPidPath(env));
-    } catch {
+    } catch (e) {
       // Nothing to clean up.
+      errors.expected('removing the server pid file', e);
     }
     return 'stopped';
   }
@@ -269,7 +288,8 @@ export function stopServer(
   try {
     process.kill(holder.pid, 'SIGTERM');
     return 'stopped';
-  } catch {
+  } catch (e) {
+    errors.expected('signalling the process on the port', e);
     return 'foreign';
   }
 }

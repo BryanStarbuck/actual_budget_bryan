@@ -1,8 +1,11 @@
 // @ts-strict-ignore
 import { listen } from '@actual-app/core/platform/client/connection';
 import type { Query } from '@actual-app/core/shared/query';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { aqlQuery } from './aqlQuery';
+
+const errors = errorFileFor('desktop-client/src/queries/liveQuery.ts');
 
 export function liveQuery<TResponse = unknown>(
   query: Query,
@@ -217,7 +220,7 @@ export class LiveQuery<TResponse = unknown> {
         this.onData(this.data, previousData);
       }
     } catch (e) {
-      console.log('Error fetching data', e);
+      errors.caught('running a live query', e);
       this.onError(e);
     } finally {
       // always clear the request id, to prevent an infinite loop

@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import initSqlJS from '@jlongster/sql.js';
 import type { Database, SqlJsStatic, Statement } from '@jlongster/sql.js';
 
@@ -9,6 +10,8 @@ import type { SqlParam } from './types';
 import { unicodeLike } from './unicodeLike';
 
 export type { SqlParam } from './types';
+
+const errors = errorFileFor('loot-core/src/platform/server/sqlite/index.ts');
 
 // Types exported from sql.js (and Emscripten) are incomplete, so we need to redefine them here
 type FSStream = (typeof FS)['FSStream'] & {
@@ -60,6 +63,7 @@ export async function init({
         resolve(undefined);
       },
       err => {
+        errors.caught('initialising sql.js', err);
         reject(err);
       },
     );
@@ -126,7 +130,7 @@ export function runQuery<T>(
       return rows;
     } catch (e) {
       logger.log(sql);
-      throw e;
+      errors.rethrow('running a query', e);
     }
   } else {
     stmt.run(params);
@@ -165,7 +169,7 @@ export function transaction(db: Database, fn: () => void) {
       execQuery(db, after);
     }
 
-    throw ex;
+    errors.rethrow('running a database transaction', ex);
   } finally {
     transactionDepth--;
   }

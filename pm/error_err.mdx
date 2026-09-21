@@ -1,0 +1,1673 @@
+---
+title: Actual Budget — the error file (`error.err`) and the error-routing contract
+description: >
+  Every runtime in this repo — the React UI in the browser, the loot-core engine in its web worker,
+  the Electron main and utility processes, the sync server with its machine plane, the public
+  `@actual-app/api`, the upstream `actual` CLI, our own `abx` CLI and our MCP server — writes every
+  fault it sees to ONE append-only, rotating, operator-local file: `~/T/actual_budget/error.err`.
+  The work is done by ONE reusable, zero-dependency library, `@actual-app/error-file`
+  (`packages/error-file/`), so that a call site costs one short line and nothing else: the library
+  owns formatting, cause-chain walking, secret redaction, private-data refusal, per-Error-object
+  de-duplication, burst folding, buffered async writes, crash-safe flushing, rotation, and — for the
+  code that has no filesystem (browser tab and web worker) — batched, rate-limited delivery to a
+  loopback-only ingest route that the Vite dev server and the sync server both mount. Coverage is not
+  a convention: a custom lint rule (`actual/catch-must-report`) fails the build on any `catch`
+  block, `.catch()` callback or rejection handler that neither reports, rethrows, nor explicitly
+  marks the failure as expected; and a coverage script proves, file by file, that 100% of source
+  files are either compliant or have no local error sites and are covered by the global nets. The
+  happy path pays nothing: no work runs until an error actually happens, and when one does, no
+  synchronous filesystem call is made on the request path.
+---
+
+# Actual Budget — the error file (`error.err`)
+
+`~/BGit/Bryan_git/actual_budget_bryan/packages/error-file/` · package **`@actual-app/error-file`** ·
+output **`~/T/actual_budget/error.err`** · TypeScript, zero runtime dependencies
+
+---
+
+## Table of Contents
+
+- [Introduction](#introduction)
+  - [Why this spec exists](#why-this-spec-exists)
+  - [Where this spec fits](#where-this-spec-fits)
+  - [What the operator gets from it](#what-the-operator-gets-from-it)
+  - [How it works — the idea](#how-it-works--the-idea)
+  - [How it works — the machinery](#how-it-works--the-machinery)
+  - [What this spec covers](#what-this-spec-covers)
+- [Goal](#goal)
+- [Overview](#overview)
+- [1. What we learned from the three sister apps](#1-what-we-learned-from-the-three-sister-apps)
+- [2. The rules (R1–R14)](#2-the-rules-r1r14)
+- [3. The file](#3-the-file)
+- [4. The library — `@actual-app/error-file`](#4-the-library--actual-apperror-file)
+- [5. The call-site API](#5-the-call-site-api)
+- [6. The ten code patterns](#6-the-ten-code-patterns)
+- [7. The global nets — where the library is wired in once](#7-the-global-nets--where-the-library-is-wired-in-once)
+- [8. Browser and worker delivery — the ingest route](#8-browser-and-worker-delivery--the-ingest-route)
+- [9. Performance design](#9-performance-design)
+- [10. Noise control — keeping the file worth reading](#10-noise-control--keeping-the-file-worth-reading)
+- [11. Privacy, redaction and open-source safety](#11-privacy-redaction-and-open-source-safety)
+- [12. Enforcement — the lint rule and the coverage script](#12-enforcement--the-lint-rule-and-the-coverage-script)
+- [13. Measurements of success](#13-measurements-of-success)
+- [14. Testing](#14-testing)
+- [15. Rollout — one builder, then twelve](#15-rollout--one-builder-then-twelve)
+- [16. Upstream-merge cost, and how we keep it small](#16-upstream-merge-cost-and-how-we-keep-it-small)
+- [17. Use cases](#17-use-cases)
+- [18. Acceptance criteria](#18-acceptance-criteria)
+- [19. Invariants recap](#19-invariants-recap)
+- [20. Related specs](#20-related-specs)
+
+---
+
+## Introduction
+
+### Why this spec exists
+
+Before this spec, a fault in this repo went to one of about six places, depending on which process
+had the fault:
+
+- the worker console, when loot-core's `logger.error` or `captureException` called `console.error`;
+- the sync server's stdout;
+- `server.log`, and only when the justfile had redirected stdout there;
+- nowhere at all:
+  - the machine plane's `toMachineError()` turns an unexpected throw into `internal` and drops
+    the stack;
+  - 26 React `<ErrorBoundary>`s render a fallback, and none of them sets `onError`;
+  - there is no `window.onerror`, no `unhandledrejection` listener and no `uncaughtException`
+    handler anywhere;
+- `cli.err`, but only for `abx`;
+- `mcp.err`, but only for the MCP server.
+
+So the honest answer to _"what went wrong yesterday at 4 pm?"_ was _"it depends which process, and
+maybe we'll never know."_ An engine that computes a ledger cannot be allowed to fail silently.
+
+### Where this spec fits
+
+The product has three front doors, and each one already has a spec:
+
+- the browser at `http://localhost:3001/`;
+- the MCP server ([mcp.mdx](./mcp.mdx));
+- the `abx` CLI ([cli.mdx](./cli.mdx)).
+
+All three sit on the machine plane ([apis.mdx](./apis.mdx)). This spec is not a front door. It is
+the floor under all of them: the single fault trail that every process writes to.
+
+`cli.info`/`cli.err` and `mcp.info`/`mcp.err` keep their jobs, which are a per-tool usage trail and
+audit. They also start writing every fault to `error.err`, so an operator never has to know which
+tool failed before knowing where to look.
+
+### What the operator gets from it
+
+- **One file to open.** `tail -f ~/T/actual_budget/error.err` shows faults from every process,
+  interleaved in time order, each tagged with the app and the source file it came from.
+- **A line that answers the question on its own.** Each line has four parts:
+  - **what** it was doing: _"importing the OFX file"_;
+  - **where**: `loot-core/src/server/accounts/app.ts`;
+  - **what broke**: `TypeError: Cannot read properties of undefined`, with its `cause` chain;
+  - **where in the code**: a stack trimmed to our own frames.
+- **A file that stays readable.** Five hundred identical failures become one line plus a count. A
+  retry loop cannot flood the file, and a closed laptop lid does not fill it with "network
+  unreachable".
+- **A trail that survives a crash.** The fault that kills a process is on disk before the process
+  exits.
+
+### How it works — the idea
+
+**Catching an error is the call site's job. Handling it is the library's job.**
+
+A call site writes one line, for example:
+
+```ts
+errors.caught('reconciling the account', err);
+```
+
+Everything that makes a fault record useful is done once, centrally, and off the hot path:
+
+- formatting;
+- walking the `cause` chain;
+- remembering it has already seen this exact `Error` object;
+- folding a burst of identical errors into one line;
+- redacting secrets;
+- refusing ledger data;
+- buffering, flushing and rotating the file;
+- carrying the record out of a browser that has no filesystem.
+
+That split is what lets us require that 100% of files report their faults without making 100% of
+files harder to read.
+
+### How it works — the machinery
+
+1. **One small object per module.** Each module that has error sites creates it once at the top
+   with `const errors = errorFileFor('<package>/<path>')`.
+2. **One call at each site.** Each error site calls one method on that object:
+   `caught`, `warn`, `expected`, `rethrow` or `fatal`. It can also use one of three wrappers
+   instead: `tryOr`, `reportRejection` or `guard`.
+3. **Records are built only when there is an error.** The library turns the error into a plain
+   record, de-duplicates and folds it, then gives it to a **sink**.
+4. **Each process installs one sink at boot:**
+   - The **node sink** is used by the sync server, Electron, `@actual-app/api` and both CLIs. It
+     buffers lines, appends them to `error.err` asynchronously every 5 ms, flushes synchronously on
+     exit and on a fatal error, and rotates the file at 5 MiB.
+   - The **browser sink** is used by the UI tab and the loot-core web worker. It batches records
+     and POSTs them to the loopback-only route `/error-report`, using `sendBeacon` when the page
+     is hidden.
+5. **Two servers mount the same ingest handler.** The Vite dev server (`:3001`) and the sync server
+   (`:5006`) both mount `POST /error-report` with the same handler, which writes to the same node
+   sink.
+6. **Global nets catch whatever no local site caught:**
+   - process handlers;
+   - `window` handlers;
+   - React error boundaries;
+   - loot-core's `runHandler` dispatch;
+   - the Redux rejected-action middleware;
+   - the sync server's Express error middleware;
+   - the machine-plane handler catch.
+7. **Enforcement.** A lint rule forbids an unreported catch. A coverage script proves the 100%.
+
+### What this spec covers
+
+- The file and its line format.
+- The library and its API.
+- The ten call-site patterns, with before and after code.
+- The global nets and the exact file where each one is wired in.
+- Browser delivery.
+- Performance.
+- Noise control.
+- Privacy.
+- Enforcement.
+- Success metrics.
+- Tests.
+- The rollout plan: one builder agent, then twelve partitioned agents.
+- The upstream-merge cost.
+
+It does **not** cover usage and audit logging (`cli.info`, `mcp.info`), which stay where
+[cli.mdx](./cli.mdx) §15 and [mcp.mdx](./mcp.mdx) §16 put them.
+
+---
+
+## Goal
+
+> **Every fault that happens in any source file of this repo, in any runtime, is written to
+> `~/T/actual_budget/error.err`, exactly once, and the line alone says what was being done, where,
+> and what broke. The code that makes this true is one import and one short call per error site,
+> and it costs nothing until an error actually happens.**
+
+| Half             | The rule                                                                                                                                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Completeness** | 100% of source files are compliant: every `catch`, `.catch()`, rejection handler, error boundary and process-level fault reaches the library. The lint rule and the coverage script prove it, not review. |
+| **Readability**  | A call site is one line. No call site formats, stringifies, redacts, rate-limits, de-duplicates, or touches `fs`.                                                                                         |
+| **Performance**  | Zero cost on the happy path. On the error path, no synchronous filesystem work on a request, render or handler path. The only synchronous write is the final flush on exit or on a fatal error.           |
+| **Signal**       | A burst is one line plus a count. Expected absences are not errors. The file stays small enough to read with `tail`.                                                                                      |
+| **Safety**       | No secrets and no ledger data (amounts, payees, notes, account names, statement text) are ever written. The file lives outside the repo at mode `0600`.                                                   |
+
+---
+
+## Overview
+
+```
+                                       ┌──────────────────────────────────────────────┐
+  BROWSER TAB  (desktop-client)        │  @actual-app/error-file  (packages/error-file) │
+  ─ errorFileFor(...).caught()  ───┐   │                                              │
+  ─ window 'error' / 'unhandled…'  │   │  core.ts      errorFileFor · tryOr · guard   │
+  ─ <ErrorBoundary onError>        ├──▶│               reportRejection · describe     │
+  ─ redux rejected-action mw       │   │               WeakSet dedupe · burst folding  │
+                                   │   │               redact · refuse ledger fields  │
+  WEB WORKER  (loot-core server)   │   │  sink = browser  → batch → POST /error-report │
+  ─ runHandler() rethrow net       │   │  sink = node     → buffer → appendFile        │
+  ─ captureException()  ───────────┘   │  sink = none yet → bounded pre-install queue  │
+                                       └───────┬───────────────────────┬──────────────┘
+                                               │ fetch / sendBeacon     │ in-process
+                                               ▼                        ▼
+                     ┌──────────────────────────────────┐   ┌──────────────────────────────┐
+                     │ POST /error-report  (loopback)   │   │ NODE SINK — RollingFileWriter │
+                     │  • Vite dev plugin   :3001       │──▶│  5 ms buffered async append  │
+                     │  • sync-server route :5006       │   │  sync flush on exit / fatal  │
+                     │  size cap · rate limit · sanitize│   │  5 MiB × 5 rotation · 0600   │
+                     └──────────────────────────────────┘   └──────────────┬───────────────┘
+                                                                           ▼
+  NODE PROCESSES — installNodeErrorFile({ app })            ~/T/actual_budget/error.err
+  ─ sync-server (express mw, machine plane, process.on)
+  ─ desktop-electron main + utility process
+  ─ @actual-app/api · packages/cli (`actual`)
+  ─ cli/ (`abx`) · mcp/  (vendored copy, drift-checked)
+
+  ENFORCEMENT: oxlint rule actual/catch-must-report  +  scripts/error-file-coverage.mjs
+```
+
+---
+
+## 1. What we learned from the three sister apps
+
+We read the specs and the code of three sister apps, in read-only mode. Each one converged on the
+same core: three log files, rotation at 5 MiB × 5, `stripControlChars`, and a browser → server
+bridge. Each one is also strong at something different, and each has a gap we close here.
+
+### 1.1 Internal Web App — `~/BGit/all/app/`
+
+**Spec:** `~/BGit/all/app/pm/local_storage.mdx` §6–§8. See also `pm/user_interface.mdx` §7.
+
+**Library:** a real shared package, `@internal-app/logging`, at
+`~/BGit/all/app/code/packages/logging/src/`. It has no runtime dependencies. Its files:
+
+| File                      | Contents                                                                   |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `log-channel.ts`          | `class LogChannel` with `emit`, `error`, `warn`, `transaction` and `flush` |
+| `rolling-file-writer.ts`  | `class RollingFileWriter`, the best writer of the three (below)            |
+| `nest-logger.ts`          | `installGlobalErrorHandlers({onError, flush, onShutdown})`                 |
+| `subsystem.ts`            | `subsystemLogger(name)`, one channel per folder                            |
+| `express-transactions.ts` | `transactionMiddleware`, `timedCall`, `redactUrl`                          |
+
+**How `RollingFileWriter` writes:**
+
+- The happy path does no filesystem work. A line is pushed onto an in-memory buffer.
+- An unref'd 5 ms timer drains the buffer with async `fs.appendFile`.
+- A 256 KiB buffer cap forces a synchronous drain.
+- A process-wide `exit` hook flushes synchronously.
+- The file size is cached, so there is no `stat` per write.
+
+The header comment explains the move to async writes: the old synchronous writer spent 2,771 ms
+in synchronous fs time across 4 writes, and raised 330 "event loop blocked" warnings a day.
+
+**Browser bridge:**
+
+- `reportError()` in `code/packages/frontend/src/lib/reportError.ts` sends
+  `fetch('/api/client-error', {keepalive: true})`.
+- `ClientErrorService` receives it. It rate-limits each IP to 60 reports per minute, and folds a
+  flood of one error signature into a summary once it passes 25 in 60 s.
+
+**Hook points:**
+
+- a NestJS `AllExceptionsFilter`;
+- `window` handlers;
+- the ErrorBoundary's `componentDidCatch`;
+- TanStack `QueryCache.onError` and `MutationCache.onError`.
+
+**What we take:**
+
+- the async buffered writer, exactly;
+- the idea of a real shared package, not a copy;
+- the benign-error downgrade, e.g. the ResizeObserver loop message.
+
+**Gap:** no lint rule and no coverage check, so nothing proves every error site reports.
+
+### 1.2 We The Citizens — `~/BGit/act3/we_citizens/`
+
+**Spec:** `~/BGit/act3/we_citizens/pm/errors.mdx` (rules R1–R13).
+
+**Library:** two mirrored copies, one per side.
+
+- **Backend:** `code/packages/backend/src/shared/errors.ts`, together with `logging.ts`,
+  `rolling-file-writer.ts` and `burst-coalescer.ts`.
+- **Frontend:** `code/packages/frontend/src/lib/logger.ts`.
+
+**This app has the best call-site ergonomics of the three.** Each module creates a logger once with
+`const log = loggerFor('ProblemStore')`, and calls `log.caught(attempting, err)` in its catch
+blocks. There are about 1,356 of those calls. The logger also offers:
+
+| Method                 | What it does                                               |
+| ---------------------- | ---------------------------------------------------------- |
+| `log.ignored()`        | Records a failure that doesn't matter, at INFO level only. |
+| `log.rethrow()`        | Logs the error, then throws it again.                      |
+| `log.fail()`           | Logs the error, then throws a new, client-safe error.      |
+| `log.warnOncePerDay()` | Writes one WARN per day for a standing condition.          |
+
+Three wrappers sit beside the logger:
+
+- `tryOrLog` and `tryOrLogAsync` return a fallback value instead of throwing.
+- `logRejection(log, attempting, promise)` handles fire-and-forget promises.
+
+**Supporting pieces:**
+
+- `describeError()` walks `Error.cause`, and places the cause before the stack so a length cap
+  cannot cut it off.
+- `createBurstCoalescer()` folds identical faults inside a window and appends
+  `(+N identical in the previous 30s)`. The fold key is the message, never the stack.
+- The browser sends through `navigator.sendBeacon` to `POST /api/client-error`, with a fallback to
+  `fetch(..., {keepalive: true})`. The client allows 12 forwards per minute. The server allows 120
+  per minute per client, with a global ceiling of 1,200.
+
+**What we take:**
+
+- the `loggerFor(ctx).caught(doing, err)` call-site shape (ours is `errorFileFor`);
+- the three wrappers;
+- `describeError` with causes first;
+- the burst coalescer;
+- the `sendBeacon` delivery;
+- the "gate refusal is an answer, not a fault" distinction.
+
+**Gap:** the backend and frontend copies can drift apart, and nothing lints for a bare `catch`.
+
+### 1.3 Large File Bridge — `~/BGit/Bryan_git/LargeFileBridge/`
+
+**Specs:** `~/BGit/Bryan_git/LargeFileBridge/pm/debugging.mdx`. See also `to_fix.mdx` §4.5 and
+`storage_local.mdx` §12.
+
+**Library:** a single file, `code/packages/backend/src/shared/logging.ts` (412 lines). It uses Node
+built-ins only, because _"the one thing that must never fail carries no supply-chain surface"_.
+
+**Structured errors:** `logError({file, className, operation, expected, error, data})` writes a
+structured fault line.
+
+**Repeat collapse:** `collapseKey()` normalises a line before comparing it:
+
+- paths become `<path>`;
+- hex runs become `<hex>`;
+- digits become `#`.
+
+The first line with a given key is written through. Later matches are counted and summarised as
+`[×N since HH:MM]`. A test shows that 500 near-identical errors produce fewer than 20 lines.
+
+**Transient network errors:** `isTransientNetworkError()` keeps a closed laptop lid out of
+`error.err`.
+
+**Context tags:** `withLogContext({batchId, op})` uses AsyncLocalStorage to tag every line
+written inside a batch.
+
+**What we take:**
+
+- the normalised collapse key;
+- "offline is not a fault";
+- the structured `where` and `doing` fields;
+- zero dependencies;
+- tests that read the bytes actually written to disk.
+
+**Gap:** the spec requires `logError()` at every error site. In the code there are 4 `logError`
+calls against about 660 plain `log.error`/`log.warn` calls. A rule that nothing checks does not
+get followed. **This is the single most important lesson for this spec, and it is why §12
+exists.**
+
+### 1.4 What is ours
+
+Five things are new here and exist in none of the three sister apps:
+
+1. **One package serves every runtime,** browser and node, instead of mirrored copies. `cli/` and
+   `mcp/` sit outside the yarn workspace, so they get a vendored copy that is **drift-checked
+   byte for byte** (§4.6).
+2. **Per-`Error`-object de-duplication.** A `WeakSet` records every error object already written.
+   An error that is `rethrow`n through four layers and finally hits a global net is written once,
+   by the innermost layer, which is the one that knows what was being done (R4).
+3. **A lint rule** that makes an unreported catch a build failure (§12.1).
+4. **A coverage script** that turns "100% of files" into a number CI can check (§12.2).
+5. **Refusal of private data.** The library refuses ledger-shaped fields because this repo will be
+   open source and the budget data is private (§11).
+
+---
+
+## 2. The rules (R1–R14)
+
+**R1 — Every error site reports.**
+
+- Every `catch` clause, `.catch()` callback, promise rejection handler, `onError` callback and
+  `'error'` event listener in a source file must do one of these:
+  - call the library: `caught`, `warn`, `expected`, `rethrow` or `fatal`, or one of the wrappers
+    `tryOr`, `tryOrAsync`, `reportRejection` or `guard`;
+  - rethrow;
+  - pass the error on to a call that reports it.
+- An empty catch is a lint error. A catch that only calls `console.*` or `logger.*` is a lint error.
+
+**R2 — One line per site.**
+
+- A call site never formats a message, calls `JSON.stringify` on an error, reads `err.stack`,
+  redacts, rate-limits or touches `fs`. The library does all of it.
+- The first argument is a gerund phrase saying what was being done, for example `'loading the
+budget file'`. It is not a sentence about the failure: the error already says what failed.
+
+**R3 — The library does no work until an error happens.**
+
+- `errorFileFor(where)` only stores a string.
+- No closure, formatting, timer or allocation happens per call on the happy path.
+
+**R4 — An error object is written once.**
+
+- The first call that reports a given `Error` object marks it in a `WeakSet`.
+- Later reports of the same object are dropped, whether from `rethrow` chains, global nets or
+  `captureException` after a local `caught`.
+- Primitive throwables such as strings and numbers cannot be marked, so the burst folder (R10)
+  handles them.
+
+**R5 — Rethrow keeps the context.**
+
+- `errors.rethrow(doing, err)` writes the record and then throws **the same object**, never a
+  wrapper.
+- This keeps `instanceof` checks, `err.type` and `err.code` intact for upstream callers such as
+  `APIError`, `PostError` and `SyncError`.
+
+**R6 — Expected is not an error.**
+
+- Some failures are part of normal operation, for example:
+  - a `JSON.parse` fallback;
+  - `ENOENT` on an optional file;
+  - a feature probe;
+  - a user-cancelled dialog;
+  - an `AbortError` from a cancelled fetch;
+  - a sync-server 401 that means "log in again".
+- These call `errors.expected(doing, err)`. It records nothing to `error.err` unless
+  `ACTUAL_ERROR_FILE_VERBOSE=1` is set.
+- The call is still required, so a reader sees that the author **decided** the failure was
+  expected. It was not overlooked.
+
+**R7 — A gate refusal is an answer, not a fault.**
+
+- Some failures are correct behaviour, for example:
+  - the machine plane refusing a bad key;
+  - an `APIError` for bad user input;
+  - a validation failure.
+- These are **not** written as ERROR. They use `expected`, or `warn` when they are unusual, such as
+  a refused machine key.
+
+**R8 — The browser never touches the disk; it delivers.**
+
+- Browser and worker records go through the sink to `POST /error-report`.
+- The ingest route is loopback-only and never reflects anything back.
+
+**R9 — Faults survive the crash that caused them.**
+
+- `fatal` and the process-level `uncaughtException` handler flush synchronously before
+  `process.exit`.
+- A browser sends queued records with `sendBeacon` on `pagehide`.
+
+**R10 — A burst is one line.**
+
+- Identical faults fold inside a 60 s window. Identical means the same `where`, `doing`,
+  `err.name` and normalised message.
+- The first occurrence is written through immediately. The rest are counted, and one summary line
+  is written when the window closes or at exit.
+
+**R11 — The file never takes the app down.**
+
+- Every path in the library is total. A write failure falls back to `stderr`, then to silence.
+- The library never throws into its caller, never recurses into itself, and never reports its own
+  delivery failures to `/error-report`.
+
+**R12 — No secrets and no ledger data** (§11). The library enforces this. Call sites are not trusted
+to get it right.
+
+**R13 — Tests never write the real file.**
+
+- Under `VITEST` or `NODE_ENV=test`, the default path moves to
+  `$TMPDIR/actual_budget_test_<uid>/error.err`.
+- Tests that assert on the file read that temp path.
+
+**R14 — `where` is the repo-relative source path.**
+
+- `errorFileFor('loot-core/src/server/accounts/app.ts')` uses the path with `packages/` dropped.
+- It is a literal string, so it survives bundling, and a reader can paste it straight into their
+  editor.
+- The lint rule checks that it matches the file it appears in (§12.1).
+
+---
+
+## 3. The file
+
+### 3.1 Path
+
+| What              | Value                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Default path      | `~/T/actual_budget/error.err`                                    |
+| Override          | `ACTUAL_ERROR_FILE=/abs/path/error.err` (full path)              |
+| Test path (R13)   | `$TMPDIR/actual_budget_test_<uid>/error.err`                     |
+| No home directory | `$TMPDIR/actual_budget_<uid>/error.err` (mode 0700 dir)          |
+| Mode              | file `0600`, directory `0700`, created lazily on the first write |
+| Rotated copies    | `error.err.1` … `error.err.5` (oldest dropped)                   |
+
+The directory `~/T/actual_budget/` holds only the error trail. The existing state directory,
+`~/T/_actual_budget/`, keeps `cli.info`, `cli.err`, `mcp.*`, `server.log` and `data/` unchanged. If
+the operator wants one directory for everything, `ACTUAL_ERROR_FILE` moves the file, and nothing
+else has to change.
+
+### 3.2 The line
+
+```
+[2026-09-21T16:04:11.902Z] [ERROR] [sync-server] [sync-server/src/machine/index.ts] handling POST /machine/v1/transactions/import — TypeError: Cannot read properties of undefined (reading 'id') {route=transactions.import} | cause: SqliteError: SQLITE_BUSY (code=SQLITE_BUSY)
+    at importTransactions (packages/loot-core/src/server/accounts/sync.ts:812:19)
+    at runHandler (packages/loot-core/src/server/mutators.ts:52:21)
+```
+
+The header line has these fields, in order:
+
+| Field       | Content                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| Timestamp   | ISO-8601 UTC, to the millisecond.                                                        |
+| Level       | `WARN`, `ERROR` or `FATAL`. `EXPECTED` appears only under `ACTUAL_ERROR_FILE_VERBOSE=1`. |
+| App         | The runtime (§3.3).                                                                      |
+| Where       | The repo-relative file path (R14).                                                       |
+| Doing       | The gerund phrase.                                                                       |
+| Separator   | `—`                                                                                      |
+| Error       | `Name: message`. A `code`, `errno`, `syscall` or `type` is appended as `(code=…)`.       |
+| Data        | An optional `{key=value …}` block of allowlisted, redacted primitives (§11).             |
+| Cause chain | Walks `err.cause` up to 5 deep, as `\| cause: …`.                                        |
+
+**Stack lines** follow, indented four spaces. The stack is trimmed as follows:
+
+- `node_modules` frames and the library's own frames are dropped;
+- at most 12 frames are kept;
+- absolute paths are shortened to be repo-relative.
+
+**Folded summary line:**
+
+```
+[2026-09-21T16:05:11.902Z] [ERROR] [web] [loot-core/src/server/sync/index.ts] syncing the budget — ×37 more in the previous 60s (first at 16:04:11): PostError: network-failure
+```
+
+**Control-character guard.** Every field goes through `stripControlChars`: `\x00-\x1f`, `\x7f`,
+` ` and ` ` become a space. A field cannot forge a second header line.
+
+**Length caps:**
+
+- The message is capped at 2,000 characters, cut in the middle so the start and the end both
+  survive.
+- The data block is capped at 1,000 characters.
+- The whole record is capped at 8,000 characters.
+
+### 3.3 `app` values
+
+| `app`               | Runtime                                                              | Sink              |
+| ------------------- | -------------------------------------------------------------------- | ----------------- |
+| `web`               | desktop-client in a browser tab                                      | browser           |
+| `worker`            | loot-core server in the web worker / SharedWorker                    | browser           |
+| `electron-main`     | desktop-electron main process                                        | node              |
+| `electron-server`   | desktop-electron utility process (loot-core)                         | node              |
+| `electron-renderer` | desktop-client inside Electron                                       | IPC → main → node |
+| `sync-server`       | packages/sync-server, including the machine plane                    | node              |
+| `api`               | `@actual-app/api` in any host process (including the machine engine) | node (host's)     |
+| `actual-cli`        | upstream `packages/cli` (`actual`)                                   | node              |
+| `abx`               | our CLI, `cli/`                                                      | node (vendored)   |
+| `mcp`               | our MCP server, `mcp/`                                               | node (vendored)   |
+| `vite`              | the ingest route when the dev server itself faults                   | node              |
+
+When a browser record arrives through `/error-report`, the ingest handler adds `via=<host>` to the
+data block, so a reader can tell a dev-server delivery from a sync-server one.
+
+---
+
+## 4. The library — `@actual-app/error-file`
+
+### 4.1 Placement
+
+`packages/error-file/` is a new workspace. It follows the pattern of `@actual-app/crdt`: source
+TypeScript exported directly, `"type": "module"`, and `"exports"` pointing at `./src/*.ts`. It
+**must have zero runtime dependencies** and **must never import React, Node's `fs` from the
+universal entry, or anything from loot-core**. loot-core, desktop-client, sync-server,
+desktop-electron, api and packages/cli each add `"@actual-app/error-file": "workspace:*"`.
+
+```
+packages/error-file/
+  package.json            name @actual-app/error-file, exports below, zero deps
+  tsconfig.json           strict, no @ts-strict-ignore
+  README.md               one screen: the API table + the ten patterns in brief
+  src/
+    index.ts              UNIVERSAL: errorFileFor, tryOr, tryOrAsync, reportRejection, guard,
+                          reportBoundaryError, describeError, isReported, setErrorSink, flushErrorFile
+    core.ts               record building, WeakSet dedupe, burst folder, pre-install queue
+    describe.ts           describeError, cause walk, stack trim, stripControlChars, caps
+    redact.ts             secret + ledger-field refusal, URL query redaction
+    fold.ts               createBurstFolder (normalised key, window, summaries, key cap)
+    format.ts             record → line(s)
+    node.ts               NODE ONLY: installNodeErrorFile, RollingFileWriter, process handlers
+    rolling-file-writer.ts
+    browser.ts            BROWSER ONLY: installBrowserErrorFile, batched beacon sink, window handlers
+    ingest.ts             NODE ONLY: createErrorReportHandler (connect/express middleware)
+    vite-plugin.ts        NODE ONLY: errorReportVitePlugin() for desktop-client/vite.config.mts
+    *.test.ts             vitest, beside each file
+```
+
+Exports map:
+
+```json
+{
+  ".": "./src/index.ts",
+  "./node": "./src/node.ts",
+  "./browser": "./src/browser.ts",
+  "./ingest": "./src/ingest.ts",
+  "./vite-plugin": "./src/vite-plugin.ts"
+}
+```
+
+`index.ts` is **isomorphic**. It is the only entry point that ordinary source files import. Hosts
+import `./node` or `./browser` exactly once, at boot (§7).
+
+### 4.2 Core behaviour — `core.ts`
+
+- **Sink slot.** A module-level `let sink: ErrorSink | null`, set by `setErrorSink`. Until a sink is
+  installed, records go to a **bounded pre-install queue** holding at most 200 records; overflow is
+  counted. `installNodeErrorFile` and `installBrowserErrorFile` drain that queue on install. The
+  queue exists because a module can fault at import time, before the host has booted.
+- **The report path runs only when there is an error:**
+  1. `isReported(err)` → if true, return.
+  2. Mark `err` in a `WeakSet`, for objects only.
+  3. Compute the fold key and ask the burst folder. If the error is folded, return.
+  4. Build the record: `{ts, level, app, where, doing, error: describeError(err), data: redact(data)}`.
+  5. `sink.write(record)`.
+- **Totality.** The whole path is wrapped in one `try/catch` that falls back to `console.error`
+  once. A **re-entrancy flag** turns any error thrown while reporting into a silent drop, so the
+  library can never loop.
+
+### 4.3 The node sink — `node.ts` and `rolling-file-writer.ts`
+
+`installNodeErrorFile({ app, file?, handleProcessErrors = true, exitOnUncaught = true })` does the
+following:
+
+- It resolves the path (§3.1), creates the `RollingFileWriter`, sets the sink and drains the
+  pre-install queue.
+- When `handleProcessErrors` is true, it installs these handlers, idempotently:
+  - `uncaughtException` → `fatal`, then a synchronous flush, then `exit(1)` if `exitOnUncaught`.
+  - `unhandledRejection` → `caught('an unhandled promise rejection', reason)`.
+  - `beforeExit` and `exit` → a synchronous flush.
+  - SIGINT and SIGTERM → a synchronous flush. The host's own signal handlers are not replaced.
+- It returns `{ flush, file }`.
+
+`RollingFileWriter` is ported from `~/BGit/all/app/code/packages/logging/src/rolling-file-writer.ts`.
+It has one change: files are opened with mode `0600`. Its behaviour:
+
+- `write(line)` pushes onto an array and adds to a byte counter. **It does no filesystem work.**
+- A single unref'd `setTimeout(5 ms)` schedules `drainAsync()`, which does one `fs.appendFile`
+  for the joined batch.
+- `pendingBytes ≥ 256 KiB` forces a synchronous drain, to bound memory during a storm.
+- `flush()` is a synchronous barrier used by `fatal`, exit and signals.
+- The file size is cached after one `statSync` at first use. When `size + bytes > 5 MiB`, the
+  writer rolls, but never while an async append is in flight.
+- A write failure falls back to `process.stderr`, and the next write retries `mkdir`.
+- **Several processes may append to the same file.** The sync server, Electron and `abx` can all be
+  running. Appends of less than one pipe buffer are atomic with `O_APPEND` on macOS and Linux, and
+  one batch is one `appendFile` call. So lines never interleave mid-line.
+- **Rotation is done by one process only.** Each process checks the real on-disk size
+  (`statSync`) before it rolls. A process that finds the file already rolled resets its cache and
+  does not roll again.
+
+### 4.4 The browser sink — `browser.ts`
+
+`installBrowserErrorFile({ app, endpoint = '/error-report', handleGlobalErrors = true })` works in
+both a window and a worker (`self`):
+
+- **Queue.** Records go onto a queue. It flushes when it holds 20 records or after 2 s, whichever
+  comes first, with one timer.
+- **Flush.** A flush is one `fetch(endpoint, { method: 'POST', keepalive: true, body })`. The body
+  is `{ app, events: Record[] }`.
+- **Page hidden.** On `pagehide` or `visibilitychange=hidden`, the queue is sent with
+  `navigator.sendBeacon`, in the window only.
+- **Budget.** At most 30 records a minute. The rest are counted and sent as one summary record.
+- **Delivery failure** is silent, with at most one `console.warn` per session. The error is never
+  reported back into the queue (R11).
+- **Global handlers.** When `handleGlobalErrors` is true, it installs listeners for `error` and
+  `unhandledrejection` on `window` or `self`. It ignores the benign ResizeObserver loop message
+  and chunk-reload noise (§10).
+
+### 4.5 The ingest handler — `ingest.ts` and `vite-plugin.ts`
+
+`createErrorReportHandler({ writer })` returns an Express/connect middleware for
+`POST /error-report`. It is detailed in §8. `errorReportVitePlugin()` mounts the same handler in
+Vite's `configureServer`, so `yarn start` (`:3001`) writes browser faults without a sync server
+running.
+
+### 4.6 `cli/` and `mcp/` — the vendored copy
+
+`cli/` and `mcp/` are outside the yarn workspace. They are compiled by plain `tsc` with
+`rootDir: src`. They cannot import workspace TypeScript.
+
+`scripts/sync-error-file.mjs` copies these files into `cli/code/src/vendor/error-file/` and
+`mcp/src/vendor/error-file/`:
+
+- `index.ts`
+- `core.ts`
+- `describe.ts`
+- `redact.ts`
+- `fold.ts`
+- `format.ts`
+- `node.ts`
+- `rolling-file-writer.ts`
+
+Each copy gets a `// GENERATED from packages/error-file — run scripts/sync-error-file.mjs` header.
+
+The error-file test `vendor-drift.test.ts` fails if any vendored copy differs from the source after
+the header. The root justfile `build` runs the sync first. So "copy" never means "drift" — this
+closes the gap that We The Citizens left open (§1.2).
+
+---
+
+## 5. The call-site API
+
+Everything an ordinary source file needs is exported from `@actual-app/error-file`.
+
+```ts
+export function errorFileFor(where: string): ErrorFile;
+
+export type ErrorFile = {
+  caught(doing: string, err: unknown, data?: ErrorData): void; // ERROR  → error.err
+  warn(doing: string, err?: unknown, data?: ErrorData): void; // WARN   → error.err
+  expected(doing: string, err: unknown): void; // nothing (VERBOSE: EXPECTED)
+  rethrow(doing: string, err: unknown, data?: ErrorData): never; // ERROR, then throw err (same object)
+  fatal(doing: string, err: unknown, data?: ErrorData): void; // FATAL + synchronous flush (node)
+};
+
+export function tryOr<T>(
+  errors: ErrorFile,
+  doing: string,
+  fn: () => T,
+  fallback: T,
+): T;
+export function tryOrAsync<T>(
+  errors: ErrorFile,
+  doing: string,
+  fn: () => Promise<T>,
+  fallback: T,
+): Promise<T>;
+export function reportRejection(
+  errors: ErrorFile,
+  doing: string,
+  p: Promise<unknown>,
+): void;
+export function guard<A extends unknown[]>(
+  errors: ErrorFile,
+  doing: string,
+  fn: (...a: A) => unknown,
+): (...a: A) => void;
+export function reportBoundaryError(
+  errors: ErrorFile,
+  doing: string,
+): (error: unknown, info?: { componentStack?: string | null }) => void;
+
+export type ErrorData = Record<
+  string,
+  string | number | boolean | null | undefined
+>;
+export function describeError(err: unknown): string; // for code that must show a message
+export function isReported(err: unknown): boolean;
+```
+
+**Rules of use:**
+
+- **One per module.** Create the object once, at module scope, directly after the imports:
+  `const errors = errorFileFor('desktop-client/src/components/accounts/Account.tsx');`.
+  - The name is always `errors`. The lint rule keys on it (§12.1).
+  - Inside a class the module constant is still used. No per-instance objects are created.
+- **Write `doing` as a gerund phrase with no trailing period:** `'loading the payee list'`, not
+  `'Failed to load payees.'`
+  - Dynamic parts go in `data`, not in `doing`, so the fold key stays stable:
+    `errors.caught('syncing the account', err, { accountId })`.
+  - `accountId` is an opaque id, so it is allowed. An account **name** is ledger data and is
+    refused (§11).
+- **`guard` is for callbacks** that nobody awaits: timers, event listeners, `onChange` handlers
+  that call async code, and `worker.onmessage`. It returns a function that runs `fn` and reports
+  both a synchronous throw and a returned rejected promise.
+- **`reportBoundaryError`** returns an `onError` for `react-error-boundary`. It appends the React
+  component stack to the record as the first frames.
+
+---
+
+## 6. The ten code patterns
+
+Each pattern shows the code **before** and **after**. The after version adds one import at the top
+of the file, `import { errorFileFor, … } from '@actual-app/error-file';`, and one module constant:
+
+```ts
+const errors = errorFileFor('<repo-relative path>');
+```
+
+Neither is repeated in the examples below.
+
+### Pattern 1 — the plain `try/catch` that handles and continues
+
+The most common site. Report, then keep doing whatever the catch already did.
+
+```ts
+// before — loot-core/src/server/budgetfiles/app.ts
+try {
+  await cloudStorage.upload();
+} catch (e) {
+  logger.warn('Upload failed', e);
+  return { error: getUploadError(e) };
+}
+
+// after
+try {
+  await cloudStorage.upload();
+} catch (e) {
+  errors.caught('uploading the budget file', e);
+  return { error: getUploadError(e) };
+}
+```
+
+`logger.warn` is **replaced**, not kept next to the new call. The library already echoes records
+to the console in development (§10.4).
+
+### Pattern 2 — catch that cleans up and rethrows
+
+Use `rethrow`. It writes the record once, then throws the same object, so upstream `instanceof`
+checks and `err.type` checks keep working (R5). Outer layers that catch the same object again are
+de-duplicated (R4).
+
+```ts
+// before — loot-core/src/server/db/index.ts
+try {
+  db.transaction(fn);
+} catch (e) {
+  db.execQuery('ROLLBACK');
+  throw e;
+}
+
+// after
+try {
+  db.transaction(fn);
+} catch (e) {
+  db.execQuery('ROLLBACK');
+  errors.rethrow('running a database transaction', e);
+}
+```
+
+A plain `throw e` with no cleanup does not need changing. The lint rule accepts a bare rethrow,
+because the frame that finally handles the error reports it. Use `rethrow` only when **this** frame
+knows something the outer frame won't: what was being done here.
+
+### Pattern 3 — the expected failure (probe, fallback, optional file)
+
+```ts
+// before — sync-server/src/load-config.js
+let userConfig;
+try {
+  userConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+} catch {
+  userConfig = {};
+}
+
+// after
+let userConfig;
+try {
+  userConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+} catch (e) {
+  errors.expected('reading the optional config.json', e);
+  userConfig = {};
+}
+```
+
+The file gets nothing unless `ACTUAL_ERROR_FILE_VERBOSE=1` is set, and the reader of the code sees
+that the swallow was a decision (R6).
+
+Sometimes the expected case can be told apart from a real fault in code. When it can, split the
+two:
+
+```ts
+} catch (e) {
+  if (isEnoent(e)) errors.expected('reading the optional config.json', e);
+  else errors.caught('reading config.json', e);
+  userConfig = {};
+}
+```
+
+### Pattern 4 — the value-with-fallback expression (`tryOr`)
+
+This pattern replaces a five-line `let`/`try`/`catch` with one expression. Readability improves,
+not just coverage.
+
+```ts
+// before — desktop-client/src/components/reports/…
+let parsed;
+try {
+  parsed = JSON.parse(widget.meta);
+} catch (e) {
+  console.error(e);
+  parsed = null;
+}
+
+// after
+const parsed = tryOr(
+  errors,
+  'parsing the widget settings',
+  () => JSON.parse(widget.meta),
+  null,
+);
+```
+
+`tryOrAsync` has the same shape for an `await`:
+
+```ts
+const rates = await tryOrAsync(
+  errors,
+  'fetching exchange rates',
+  () => fetchRates(day),
+  [],
+);
+```
+
+### Pattern 5 — fire-and-forget promise (`reportRejection`)
+
+The `void promise` / missing `await` pattern is how silent failures happen.
+
+```ts
+// before — desktop-client/src/components/App.tsx
+useEffect(() => {
+  void send('get-remote-files');
+}, []);
+
+// after
+useEffect(() => {
+  reportRejection(
+    errors,
+    'refreshing the remote budget list',
+    send('get-remote-files'),
+  );
+}, []);
+```
+
+An existing `.catch()` that only logs becomes a `reportRejection`:
+
+```ts
+// before
+startWatcher().catch(err => console.log(err));
+// after
+reportRejection(errors, 'starting the file watcher', startWatcher());
+```
+
+A `.catch()` that **recovers** keeps its shape and reports inside:
+
+```ts
+const files = await listFiles().catch(e => {
+  errors.caught('listing budget files', e);
+  return [];
+});
+```
+
+### Pattern 6 — callbacks nobody awaits: timers, listeners, `onmessage` (`guard`)
+
+```ts
+// before — loot-core/src/platform/client/connection/index.ts
+worker.onmessage = msg => handleMessage(worker, msg);
+setTimeout(() => runSync(), 5000);
+input.addEventListener('change', async e => {
+  await importFile(e.target.files[0]);
+});
+
+// after
+worker.onmessage = guard(errors, 'handling a worker message', msg =>
+  handleMessage(worker, msg),
+);
+setTimeout(
+  guard(errors, 'running the scheduled sync', () => runSync()),
+  5000,
+);
+input.addEventListener(
+  'change',
+  guard(errors, 'importing the chosen file', async e => {
+    await importFile(e.target.files[0]);
+  }),
+);
+```
+
+`guard` reports a synchronous throw **and** a rejected promise returned by an async callback. It
+returns `void`, so it is safe as a DOM listener.
+
+**Performance.** `guard` allocates one closure at wrap time, not per call. Never call `guard`
+inside a render body or a hot loop. Wrap the callback once where it is registered.
+
+### Pattern 7 — React render errors (`reportBoundaryError`)
+
+react-error-boundary already catches render errors. It just never reported them.
+
+```tsx
+// before — desktop-client/src/components/App.tsx
+<ErrorBoundary FallbackComponent={ErrorFallback}>
+  <AppInner />
+</ErrorBoundary>
+
+// after
+<ErrorBoundary
+  FallbackComponent={ErrorFallback}
+  onError={reportBoundaryError(errors, 'rendering the app shell')}
+>
+  <AppInner />
+</ErrorBoundary>
+```
+
+This is done for all 26 `<ErrorBoundary>` instances. The `onError` value is created once. With the
+React Compiler that is automatic, and outside a component it is a module constant.
+
+`useErrorBoundary().showBoundary(err)` needs no extra call. The boundary's `onError` reports it.
+
+### Pattern 8 — the server/API boundary: Express middleware and handler dispatch
+
+These are central catch points. Wiring them once covers every route and every handler behind them.
+
+```ts
+// sync-server/src/util/middlewares.ts — before
+function errorMiddleware(err, req, res, _next) {
+  console.log(`Error on endpoint %s`, {
+    requestUrl: req.url,
+    stacktrace: err.stack,
+  });
+  res.status(500).send({ status: 'error', reason: 'internal-error' });
+}
+// after
+function errorMiddleware(err, req, res, _next) {
+  errors.caught(`handling ${req.method} ${routeOf(req)}`, err);
+  res.status(500).send({ status: 'error', reason: 'internal-error' });
+}
+```
+
+The machine plane's single route catch in `sync-server/src/machine/index.ts` `handlerFor()`
+currently drops the stack. After the change it reports only what is a real fault:
+
+```ts
+} catch (err) {
+  const machineError = toMachineError(err);
+  if (machineError.code === 'internal') errors.caught(`handling ${def.method} ${def.path}`, err);
+  else errors.expected(`handling ${def.method} ${def.path}`, err);   // a gate refusal is an answer (R7)
+  sendError(res, machineError);
+}
+```
+
+The hint in `envelope.ts` changes from `read ~/T/_actual_budget/server.log` to
+`read ~/T/actual_budget/error.err`.
+
+loot-core's `runHandler` in `loot-core/src/server/mutators.ts` sees every handler call on every
+platform: browser worker, Electron and api. It becomes the engine's net:
+
+```ts
+const promise = handler(args).catch(err => {
+  if (!isUserFacingError(err))
+    errors.rethrow(`running the ${name} handler`, err);
+  throw err; // APIError & friends: an answer, not a fault (R7)
+});
+```
+
+### Pattern 9 — process and window level: the last net
+
+These are wired once per runtime by `installNodeErrorFile` and `installBrowserErrorFile`. A source
+file never writes them itself. They exist so that "nobody caught it" still means "it is in the
+file".
+
+```ts
+// sync-server/src/app.ts — first statement of run()
+installNodeErrorFile({ app: 'sync-server' });
+```
+
+```ts
+// desktop-client/src/index.tsx — before the first render
+installBrowserErrorFile({ app: 'web' });
+```
+
+```ts
+// desktop-client/src/browser-server.js — first thing in the worker
+installBrowserErrorFile({ app: 'worker' });
+```
+
+The existing `process.on('unhandledRejection', reason => console.log('Rejection:', reason))` in
+`sync-server/src/app.ts` is deleted. The library's handler replaces it.
+
+### Pattern 10 — entry points and top-level `main().catch`
+
+Every CLI and bootstrap ends in one `catch`. It becomes `fatal`, which writes the record and flushes
+synchronously before the exit (R9).
+
+```ts
+// packages/cli/src/index.ts — before
+program.parseAsync(process.argv).catch((err: unknown) => {
+  process.stderr.write(`Error: ${normalizeThrownMessage(err)}\n`);
+  process.exitCode = 1;
+});
+// after
+program.parseAsync(process.argv).catch((err: unknown) => {
+  errors.fatal('running the actual CLI', err, {
+    command: process.argv[2] ?? '',
+  });
+  process.stderr.write(`Error: ${normalizeThrownMessage(err)}\n`);
+  process.exitCode = 1;
+});
+```
+
+```ts
+// packages/sync-server/app.ts — before
+import('./src/app.js')
+  .then(app => app.run())
+  .catch(err => {
+    console.log('Error starting app:', err);
+    process.exit(1);
+  });
+// after
+import('./src/app.js')
+  .then(app => app.run())
+  .catch(err => {
+    errors.fatal('starting the sync server', err);
+    process.exit(1);
+  });
+```
+
+User-facing output such as the `stderr` line and the exit code is unchanged. The error file is
+added next to it; it does not replace it.
+
+### 6.11 Things that are NOT error sites (do not wrap)
+
+- **A `try/finally` with no `catch`.** The error propagates, and the frame that catches it reports
+  it.
+- **A plain `throw new Error(...)`.** Throwing is not catching.
+- **Code whose only failure mode is a thrown error that propagates.** The global nets cover it,
+  and adding a local `try` would change behaviour.
+- **Test files, e2e, mocks, fixtures, stories, generated icons** (§12.3).
+- **The error-file package itself.** It must never report into itself (R11).
+
+---
+
+## 7. The global nets — where the library is wired in once
+
+Every entry below is a single, small edit at a central point. Together they guarantee that a fault
+reaches the file even in a file with no local catch at all. That is how a file with **no error
+sites** is still covered.
+
+| #   | Runtime           | File (repo-relative)                                                                      | Edit                                                                                                                                                                                                                                                                                                                                  |
+| --- | ----------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N1  | web               | `packages/desktop-client/src/index.tsx`                                                   | `installBrowserErrorFile({ app: 'web' })` before render                                                                                                                                                                                                                                                                               |
+| N2  | worker            | `packages/desktop-client/src/browser-server.js` + `packages/loot-core/src/server/main.ts` | `installBrowserErrorFile({ app: 'worker' })` — browser-server.js is an unbundled classic script that cannot import the library, so main.ts exports `installWorkerErrorFile()` and `workerErrors`, and the worker calls them on the `backend` global right after `importScripts()`; `app-init-failure` paths call `workerErrors.fatal` |
+| N3  | web               | `packages/desktop-client/src/components/App.tsx` + all 26 `<ErrorBoundary>`               | `onError={reportBoundaryError(errors, …)}`                                                                                                                                                                                                                                                                                            |
+| N4  | web               | `packages/desktop-client/src/redux/store.ts` `notifyOnRejectedActionsMiddleware`          | replace `console.error(action.error)` with `errors.caught(\`running ${action.type}\`, action.error)`                                                                                                                                                                                                                                  |
+| N5  | web               | `packages/desktop-client/src/global-events.ts` `server-error`                             | `errors.warn('receiving a server-error event from the engine')` (the engine side already wrote the real record)                                                                                                                                                                                                                       |
+| N6  | all loot-core     | `packages/loot-core/src/platform/exceptions/index.ts`                                     | `captureException(exc)` → `errorFileFor('loot-core/…/exceptions').caught('capturing an exception', exc)`; `captureBreadcrumb` unchanged. Every existing call site becomes reporting with zero edits there.                                                                                                                            |
+| N7  | all loot-core     | `packages/loot-core/src/server/mutators.ts` `runHandler`                                  | Pattern 8 net                                                                                                                                                                                                                                                                                                                         |
+| N8  | worker            | `packages/loot-core/src/platform/client/connection/index.ts`                              | `capture-exception` message branch: forward to `errors.caught` (it was dead code; keep it working)                                                                                                                                                                                                                                    |
+| N9  | sync-server       | `packages/sync-server/src/app.ts`                                                         | `installNodeErrorFile({ app: 'sync-server' })`; mount `/error-report`; add an **app-level** `errorMiddleware` after all routes; delete the console-only `unhandledRejection`                                                                                                                                                          |
+| N10 | sync-server       | `packages/sync-server/src/util/middlewares.ts` `errorMiddleware`                          | Pattern 8; also fix the sub-apps that register it **before** their routes (`app-sync.ts`, `app-account.js`) so it can actually fire                                                                                                                                                                                                   |
+| N11 | sync-server       | `packages/sync-server/src/machine/index.ts` `handlerFor` + `envelope.ts` hint             | Pattern 8                                                                                                                                                                                                                                                                                                                             |
+| N12 | sync-server       | `packages/sync-server/app.ts`                                                             | Pattern 10                                                                                                                                                                                                                                                                                                                            |
+| N13 | electron-main     | `packages/desktop-electron/index.ts`                                                      | `installNodeErrorFile({ app: 'electron-main' })`; `app.on('render-process-gone' / 'child-process-gone')` → `errors.caught`; `logMessage('error', …)` also → `errors.warn`; IPC channel `error-report` → sink                                                                                                                          |
+| N14 | electron-server   | `packages/desktop-electron/server.ts`                                                     | `installNodeErrorFile({ app: 'electron-server' })`; `reportInitFailure` → `errors.fatal`                                                                                                                                                                                                                                              |
+| N15 | electron-renderer | `packages/desktop-electron/preload.ts` + desktop-client `index.tsx`                       | in Electron, `installBrowserErrorFile({ app: 'electron-renderer', transport: ipc })` — the preload exposes `reportErrors(events)` over `ipcRenderer.send('error-report')`                                                                                                                                                             |
+| N16 | api               | `packages/api/index.ts` `init()`                                                          | `installNodeErrorFile({ app: 'api', handleProcessErrors: false })` if no sink is installed yet (a library must not hijack its host's process handlers)                                                                                                                                                                                |
+| N17 | actual-cli        | `packages/cli/src/index.ts`                                                               | `installNodeErrorFile({ app: 'actual-cli' })` + Pattern 10                                                                                                                                                                                                                                                                            |
+| N18 | abx               | `cli/code/src/index.ts`, `cli/code/src/main.ts`                                           | `installNodeErrorFile({ app: 'abx' })` from the vendor copy; the top-level catch adds `errors.caught` next to the existing `logger.error` (cli.err stays)                                                                                                                                                                             |
+| N19 | mcp               | `mcp/src/index.ts`, `mcp/src/server.ts`                                                   | `installNodeErrorFile({ app: 'mcp' })`; the tool-dispatch `internal` branch adds `errors.caught`; the `unhandledRejection` handler routes to the library; **nothing on stdout, ever**                                                                                                                                                 |
+| N20 | vite (dev)        | `packages/desktop-client/vite.config.mts`                                                 | `plugins: [errorReportVitePlugin(), …]`                                                                                                                                                                                                                                                                                               |
+
+---
+
+## 8. Browser and worker delivery — the ingest route
+
+### 8.1 The route
+
+The route is `POST /error-report`. The body is:
+
+```json
+{
+  "app": "web",
+  "events": [
+    {
+      "ts": "…",
+      "level": "ERROR",
+      "where": "…",
+      "doing": "…",
+      "error": "…",
+      "stack": "…",
+      "data": {}
+    }
+  ]
+}
+```
+
+It is mounted in two places:
+
+- the Vite dev server (`:3001`), through the plugin;
+- the sync server (`:5006`), in `app.ts`, **before** the SPA catch-all.
+
+It sits outside `/machine/v1`, so it needs no machine key. The browser never holds that key, and
+must not.
+
+### 8.2 Guards, in order
+
+1. **Loopback only.** If `req.socket.remoteAddress` is not `127.0.0.1`, `::1` or
+   `::ffff:127.0.0.1`, the handler answers `204` and does nothing. It does not answer `403`,
+   because nothing about the route should be probe-able.
+2. **Content type.** It accepts `application/json` and `text/plain`. `text/plain` is there because
+   `sendBeacon` sends a Blob.
+3. **Size cap.** The body is capped at 64 KiB, read as a stream. Anything larger is dropped.
+4. **Event cap.** At most 50 events per request. The rest are dropped and counted.
+5. **Rate limit.** 240 events per minute per `(app, remoteAddress)`, with a global ceiling of 1,200
+   per minute. Dropped events are counted and written as one WARN per minute:
+   `dropped N browser reports over the rate limit`.
+6. **Sanitize.** Every string field goes through `stripControlChars` and the caps in §3.2. Every
+   `data` value goes through `redact()` again. The server never trusts the browser's redaction.
+7. **Tag and write.** Each event is tagged `via=vite|sync-server`, then written through the node
+   sink.
+8. **Answer.** The route always answers `204`, including for events it dropped or folded. It never
+   echoes the body back.
+
+### 8.3 Why a separate route and not the machine plane
+
+- The machine plane is authenticated with a secret that must never reach a browser.
+- The ingest route has no secret. Its safety comes from these guards instead:
+  - it is loopback-only;
+  - it accepts write-only, append-only, capped and sanitised input;
+  - it produces no output.
+- An attacker on the same machine who can post to it can only add capped lines to a local file.
+  That same attacker could already write to the file directly.
+
+---
+
+## 9. Performance design
+
+| Concern          | Decision                                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Happy path       | `errorFileFor` stores one string. Pattern calls are ordinary method calls that run only inside a `catch`. `tryOr` and `tryOrAsync` add one function call to a `try`, which is negligible. `guard` allocates once, at registration.                                  |
+| Error path, node | Record building is pure JS. `write` is an array push. A 5 ms unref'd timer drains the buffer with async `appendFile` on the libuv threadpool. There is **no sync fs on a request path**.                                                                            |
+| Storm            | The burst folder caps writes, since identical faults become 1 line per 60 s. The 256 KiB buffer cap bounds memory. The fold table is capped at 1,000 keys, evicting least-recently-seen, and a key evicted while it still owes a summary writes that summary first. |
+| Stack cost       | `err.stack` is read only on the error path. Stack trimming uses string split and filter, with no source-map lookups at runtime.                                                                                                                                     |
+| Browser          | One fetch per 20 records or 2 s, a client budget of 30 records per minute, and `sendBeacon` only on hide. The worker batches separately, so it never blocks on the UI thread.                                                                                       |
+| Render path      | `reportBoundaryError` returns a stable function. The library never triggers a React state update.                                                                                                                                                                   |
+| Crash            | A synchronous flush happens only on `fatal`, `uncaughtException`, `exit` and signals. This is the one deliberate sync write, and it is the right trade-off at the moment the process is dying.                                                                      |
+| Rotation         | Size is cached. At most one `statSync` per roll check across processes. A roll is a synchronous rename chain of about 1–2 ms, once every 5 MiB.                                                                                                                     |
+| Dependencies     | Zero, for no bundle weight and no supply-chain surface. `packages/error-file` adds under 5 KB gzip to the browser bundle, and the web build must stay within that budget.                                                                                           |
+| Tests and CI     | The library's tests measure these properties (§14.1).                                                                                                                                                                                                               |
+
+**What not to do**, because it would hurt performance, and the reviewer rejects it:
+
+- calling `errorFileFor` inside a function body or a loop;
+- calling `guard` inside render;
+- building the `doing` string with a template literal inside a hot loop. Put the dynamic parts in
+  `data`, which is built only on error;
+- wrapping a hot inner loop body in `tryOr`. Wrap the loop instead.
+
+---
+
+## 10. Noise control — keeping the file worth reading
+
+### 10.1 Burst folding (R10)
+
+The fold key is built from these parts:
+
+- `app`, `where` and `doing`;
+- `err.name`;
+- the **normalised** message: digits become `#`, hex runs of 8 or more become `<hex>`, absolute
+  paths become `<path>`, UUIDs become `<uuid>`, and the message is cut to 300 characters.
+
+The window is 60 s. The first occurrence of a key is written through. Later ones are counted. When
+the window closes, one summary line is written (§3.2). On exit, every owed summary is flushed.
+
+The stack is never part of the key. Two stacks for one failure would otherwise defeat the fold.
+This is We The Citizens' §7.2b lesson.
+
+### 10.2 Transient network errors
+
+A `PostError('network-failure')`, `ECONNREFUSED` to the sync server, `ENOTFOUND` or `EAI_AGAIN`
+reported by the sync layer is folded **per 10 minutes**, not per 60 s, and is written as `WARN`, not
+`ERROR`. A closed laptop is not a fault storm. This is LFB's "offline is not a fault".
+
+### 10.3 Benign browser conditions
+
+These are never written:
+
+- `ResizeObserver loop completed with undelivered notifications`, but only when no `Error` object
+  was thrown;
+- errors raised by the Vite HMR client in development.
+
+A chunk-load failure (`LazyLoadFailedError`) is a `WARN`.
+
+### 10.4 Console echo
+
+- **Development and test:** every record the library writes is also printed once to the console,
+  using `console.error` for ERROR and FATAL and `console.warn` for WARN. That way a developer
+  watching DevTools or the terminal loses nothing when `logger.warn` or `console.error` calls are
+  replaced.
+- **Production:** the echo is off unless `ACTUAL_ERROR_FILE_ECHO=1` is set.
+- **MCP:** the echo goes to **stderr only**, because stdout is the JSON-RPC channel.
+
+---
+
+## 11. Privacy, redaction and open-source safety
+
+This repo is public. The budget is not. The error file lives **outside** the repo, in `~/T/`, at
+mode `0600`. On top of that, the library applies these defences, so a call site cannot get privacy
+wrong:
+
+1. **Secret keys are redacted.** In `data`, any key matching
+   `/pass(word)?|secret|token|auth|cookie|session|key|signature|credential|bearer/i` has its value
+   replaced with `[redacted]`. The match is case-insensitive.
+2. **URL query values are redacted.** Any value in `data` or in the message that looks like a URL
+   has its query values redacted for `token`, `code`, `state`, `key`, `password`, `secret`,
+   `signature` and `sig`. The parameter names are kept. This is the Internal app's `redactUrl`.
+3. **Ledger fields are refused.** In `data`, any key matching
+   `/amount|balance|payee|notes?|memo|account_?name|category_?name|description|imported_payee|statement/i`
+   is **dropped** and replaced with `[ledger-field refused]`. Only opaque ids, counts, booleans,
+   route names, file names without directories, and error codes are allowed through. The library
+   test lists the refused keys.
+4. **Request bodies are never logged.** The Express net logs the method and the route **template**
+   (`routeOf(req)` returns `req.route?.path`, not the raw URL). It never logs the body, the query
+   string or headers.
+5. **Error messages are passed through as written.** An upstream message can occasionally carry a
+   value, for example a SQLite constraint message quoting a column value. The file is local and
+   `0600`, and the message is the diagnosis, so it is kept. But **code we write must never put
+   ledger values into an error message**. The reviewer and the lint rule's `doing` check enforce
+   that `doing` is a string literal with no template expressions, except for route and handler
+   names.
+6. **Nothing from the file enters the repo.** No test fixture, snapshot, doc example or commit
+   message may contain a real line from `error.err`. Every example in this spec is synthetic.
+
+---
+
+## 12. Enforcement — the lint rule and the coverage script
+
+A rule that nothing checks is a rule nobody follows (§1.3). There are three enforcement layers.
+
+### 12.1 `actual/catch-must-report` (oxlint JS plugin rule)
+
+- **Location:** `packages/eslint-plugin-actual/lib/rules/catch-must-report.js`.
+- **Registration:** registered in `lib/index.js` and enabled in `.oxlintrc.json` — at `"warn"`
+  during Phase C (§15.2 step 5), flipped to `"error"` in Phase D (§15.4).
+- **Shape:** it follows the `no-enum.js` shape, which uses `createOnce` for oxlint compatibility.
+
+It visits four kinds of node:
+
+- `CatchClause`;
+- `CallExpression` where the callee is `.catch(fn)` or `.then(_, fn)`;
+- JSX attributes named `onError` on an `ErrorBoundary` (any element whose name ends in
+  `ErrorBoundary`);
+- `addEventListener('error', fn)`.
+
+Only an inline handler (`fn` written as an arrow or function expression) is inspected. A handler
+passed by name (`.catch(handleFailure)`) is opaque to the rule and passes; `.catch(console.error)`
+and its siblings are flagged, since that is the console-only report Pattern 5 replaces.
+
+A handler passes if its body contains any of these:
+
+- a call `errors.caught|warn|expected|rethrow|fatal(…)`, where the callee object is an identifier
+  named `errors` or ending in `Errors` (oxlint JS plugins have no type information, so the naming
+  convention of §5 stands in for the `ErrorFile` type — `workerErrors` counts, `handlers` does
+  not);
+- a call to `tryOr`, `tryOrAsync`, `reportRejection`, `guard`, `reportBoundaryError`,
+  `captureException`, `reportError` or `logError`;
+- a `throw` statement, which covers a bare rethrow;
+- a `return Promise.reject(…)`;
+- a call to a function whose name ends in `OrThrow`, or a call to `showBoundary(…)`. These are
+  hand-offs to a reporting net.
+
+The rule also has these parts:
+
+- **Messages:** `unreported` (_"This catch neither reports, rethrows, nor marks the failure
+  expected — see pm/error_err.mdx §6"_), `emptyCatch`, and for the companion checks below
+  `wrongWhere` and `dynamicDoing`.
+- **Companion check on `where`:** `errorFileFor('<literal>')` must be a string literal equal to
+  the file's repo-relative path with the leading `packages/` removed. This is fixable: `--fix`
+  rewrites it.
+- **Companion check on `doing`:** it must be a string literal, or a template literal whose
+  expressions are only `name`, `method`, `path`, `route` (bare, or as the last member of a chain
+  such as `req.method`), `def.*`, `action.type` or `routeOf(req)`. The check covers the first
+  argument of the five `errors.*` methods and the second argument of `tryOr`, `tryOrAsync`,
+  `reportRejection`, `guard` and `reportBoundaryError`.
+- **Off for:** tests, e2e, mocks, `packages/docs`, `packages/component-library/src/icons`,
+  `packages/eslint-plugin-actual`, `packages/ci-actions`, `packages/error-file/src`, and generated
+  files. These overrides are in `.oxlintrc.json` next to the existing
+  `prefer-logger-over-console` overrides.
+- **Tests:** `lib/rules/__tests__/catch-must-report.test.js`, using `runClassic`, with at least
+  10 valid and 10 invalid cases, one per pattern.
+
+### 12.2 `scripts/error-file-coverage.mjs`
+
+The script walks every source file in scope (§12.3). For each file it runs the lint rule, using
+`oxlint --format json` limited to `actual/catch-must-report`, and it counts error sites with a
+cheap parse. It then puts the file in one of four classes:
+
+| Class               | Meaning                                                                  |
+| ------------------- | ------------------------------------------------------------------------ |
+| **compliant**       | has ≥1 error site, all sites pass                                        |
+| **net-covered**     | has 0 local error sites; covered by the global nets of its runtime (§7)  |
+| **violating**       | ≥1 site fails the rule                                                   |
+| **unwired runtime** | the file belongs to a runtime whose net (§7) is missing — a hard failure |
+
+A runtime is wired when its net file contains the install call: `installBrowserErrorFile(` for
+web (`desktop-client/src/index.tsx`) and worker (`loot-core/src/server/main.ts`, N2), or
+`installNodeErrorFile(` for sync-server (`sync-server/src/app.ts`), electron-main
+(`desktop-electron/index.ts`), api (`api/index.ts`), actual-cli (`cli/src/index.ts`), abx
+(`cli/code/src/index.ts`) and mcp (`mcp/src/index.ts`). A library package takes the runtime of its
+host: `crdt` runs in the worker, `component-library` and `plugins-service` in the web tab. When a
+runtime is unwired, that class takes precedence for every file in it, and the per-file record
+still carries its `sites` and `violations` counts so the partition (§15.3) can use them.
+
+It prints totals and writes a machine-readable report to
+`~/T/actual_budget/error_file_coverage.json`, which is outside the repo. It exits non-zero on any
+violating or unwired file. `just check-errors` runs it. `yarn lint` already runs the rule itself.
+
+### 12.3 Scope — what counts as "every source file"
+
+**In scope:** all `*.ts`, `*.tsx`, `*.js`, `*.mjs`, `*.cjs` and `*.mts` under:
+
+- `packages/*/src`;
+- `packages/sync-server/app.ts`, `packages/sync-server/bin`;
+- `packages/desktop-electron/*.ts`;
+- `packages/api/*.ts`;
+- `packages/cli/src`;
+- `cli/code/src`;
+- `mcp/src`.
+
+**Excluded:**
+
+- `*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `e2e/`, `mocks/`, `*.stories.*`;
+- `packages/docs`;
+- `packages/component-library/src/icons` (auto-generated);
+- `packages/eslint-plugin-actual`;
+- `packages/ci-actions`;
+- `packages/vite-plugin-peggy`;
+- generated parsers and protobuf output (`packages/crdt/src/proto`);
+- `*.d.ts`, `*.config.*` and `*.setup.*` files (tooling, not product code);
+- `vendor/error-file` copies;
+- `packages/error-file/src` itself.
+
+---
+
+## 13. Measurements of success
+
+| #   | Metric                                                                   | Target                                            | How measured                                              |
+| --- | ------------------------------------------------------------------------ | ------------------------------------------------- | --------------------------------------------------------- |
+| M1  | Files compliant or net-covered                                           | **100%** of in-scope files                        | `scripts/error-file-coverage.mjs`                         |
+| M2  | `actual/catch-must-report` violations                                    | **0**                                             | `yarn lint`                                               |
+| M3  | Runtimes with a wired net                                                | **11 of 11** (§3.3)                               | coverage script "unwired runtime" = 0; canary tests §14.3 |
+| M4  | Canary: a deliberate throw in each runtime appears in `error.err`        | 11 of 11                                          | §14.3                                                     |
+| M5  | Duplicate lines for one `Error` object rethrown through 4 layers + a net | **1** line                                        | library test                                              |
+| M6  | Lines written for 500 identical faults in 10 s                           | **≤ 2** (1 first + 1 summary)                     | library test                                              |
+| M7  | Synchronous fs calls during 1,000 `caught()` calls (no exit)             | **0**                                             | library test with `fs` spy                                |
+| M8  | Added happy-path overhead of a `try/catch` site                          | not measurable (< noise) in `yarn test` wall time | CI time before and after                                  |
+| M9  | Browser bundle growth                                                    | < 5 KB gzip                                       | `build-stats` before and after                            |
+| M10 | Secret/ledger values in `error.err` from the redaction test corpus       | **0**                                             | library test                                              |
+| M11 | Records lost on `uncaughtException`                                      | **0**                                             | child-process test (§14.2)                                |
+| M12 | `yarn typecheck`, `yarn test`, `yarn lint`                               | green                                             | CI                                                        |
+
+Success is not just "the file exists". Success is a fault that was silent before M3 and M4 now
+being in the file within 5 ms (node) or 2 s (browser) of happening, readable without opening
+the source.
+
+---
+
+## 14. Testing
+
+### 14.1 Library unit tests — `packages/error-file/src/*.test.ts`
+
+| Test              | Checks                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| format            | Line shape, the cause chain, stack trimming, caps, and the control-character guard. A message with `\n[ERROR]` cannot forge a header.                                                         |
+| dedupe            | The same object reported through `rethrow` ×3, then `captureException`, then the process net, produces 1 line.                                                                                |
+| fold              | 500 identical faults produce 1 line plus 1 summary. The digit and hex normalisation folds `id 123` with `id 456`. The key cap evicts and still writes owed summaries.                         |
+| expected          | Writes nothing, or `EXPECTED` when `ACTUAL_ERROR_FILE_VERBOSE=1`.                                                                                                                             |
+| writer            | No sync fs on the happy path (spy `appendFileSync` = 0). A burst over 256 KiB drains synchronously. Rotation at the cap. `0600` mode. A failing path falls back to stderr and does not throw. |
+| pre-install queue | Records reported before install are written on install. Overflow is counted.                                                                                                                  |
+| redact            | Every secret key and every ledger key in the corpus is refused. URL query values are redacted.                                                                                                |
+| totality          | A throwing sink, a throwing `toString` on the error, and a circular `data` value all return normally. Re-entrancy drops the record.                                                           |
+| browser           | Batching at 20 records or 2 s. `sendBeacon` on `pagehide`. The client budget. A delivery failure is never re-queued.                                                                          |
+| ingest            | Non-loopback gets `204` with no write. Size and event caps. The rate limit plus its summary WARN. Sanitising. Always `204`.                                                                   |
+| vendor drift      | The `cli/` and `mcp/` copies match the source byte for byte after the header.                                                                                                                 |
+
+### 14.2 Crash test
+
+A child process installs the node sink, reports 3 errors, then throws synchronously. The parent
+asserts that all 3 errors plus the FATAL record are on disk. A second child does the same with an
+`unhandledRejection`.
+
+### 14.3 Runtime canaries
+
+`just check-errors --canary` sets `ACTUAL_ERROR_FILE` to a temp path, provokes one deliberate fault
+per runtime, and asserts that each one appears with the right `app` tag. The runtimes and triggers:
+
+- **sync-server:** a test-only route, enabled only under `ACTUAL_ERROR_FILE_CANARY=1`.
+- **worker:** a handler throw through `runHandler`.
+- **web:** a Playwright page that throws in a click handler.
+- **api:** a `runHandler` throw.
+- **abx:** `abx __canary`, hidden.
+- **mcp:** a tool throwing `internal`.
+- **actual-cli:** a bad subcommand path.
+- **electron:** skipped on CI unless the Electron e2e runs.
+
+### 14.4 Existing tests
+
+The existing tests must stay green. Mocks that assert `console.error` calls are updated to assert
+the library call instead. `loot-core/src/platform/exceptions/__mocks__/index.ts` stays a no-op
+mock.
+
+---
+
+## 15. Rollout — one builder, then twelve
+
+### 15.1 Phase A — the spec (this document)
+
+The spec must be complete before any code is written.
+
+### 15.2 Phase B — one builder agent
+
+The builder agent does all of this, then runs `yarn typecheck`, `yarn lint` and the library tests
+to green:
+
+1. Create `packages/error-file/` (§4) with all tests from §14.1 passing.
+2. Add the workspace dependency to loot-core, desktop-client, sync-server, desktop-electron, api
+   and packages/cli, then run `yarn install`.
+3. Write `scripts/sync-error-file.mjs` and run it, creating the vendor copies in `cli/` and `mcp/`.
+4. Wire **every global net N1–N20** (§7).
+5. Write the lint rule and its tests (§12.1). Register it at **`"warn"`** first, so the twelve
+   agents can see violations without the build going red mid-rollout.
+6. Write `scripts/error-file-coverage.mjs` and the `just check-errors` recipe.
+7. Produce the partition file for Phase C (§15.3).
+
+### 15.3 Phase C — twelve partitioned agents
+
+The coverage script lists every in-scope file. The partition assigns files to 12 agents with three
+rules:
+
+- **Balance by work, not by file count.** A file's weight is `1 + 3 × (error sites)`.
+- **Keep a directory with one agent where possible,** so neighbouring files, which share idioms,
+  get consistent treatment.
+- **No file belongs to two agents.** The global-net files from Phase B are excluded, because the
+  builder has already finished them.
+
+The partition is computed from the coverage report's per-file `sites` and `violations`: only
+files with at least one violation are assigned (a compliant or net-covered file needs no agent).
+Files are ordered by path, grouped by directory, and split into twelve contiguous segments that
+minimise the heaviest segment, so a directory stays with one agent unless it alone outweighs a
+segment. The twelve lists (`part_01.txt` … `part_12.txt`, one repo-relative path per line, first
+line `# files=N weight=W`) are written outside the repo, next to the coverage report.
+
+Each agent:
+
+1. Reads this spec (§5, §6, §9, §11).
+2. Goes through **every** file in its partition. A file with no error sites is left untouched and
+   recorded as net-covered.
+3. Applies the matching pattern at every site. It replaces a console-only or logger-only report
+   with the library call. It keeps every behaviour the catch already had: return values, user
+   notifications, rethrows and cleanup.
+4. Never changes control flow, except that a swallowed error becomes a reported one.
+5. Runs `npx oxlint` on its own files, then `yarn workspace <pkg> run typecheck` for its packages.
+6. Writes a partition report: files touched, sites converted by pattern, sites marked `expected`
+   with the reason, and anything it was unsure about.
+
+### 15.4 Phase D — close
+
+1. Flip the rule to `"error"`.
+2. Run `yarn typecheck`, `yarn lint`, `yarn test` and the coverage script. M1–M3 must be met.
+3. Fix any stragglers.
+4. Do a private-data check of the whole diff (§11.6).
+
+---
+
+## 16. Upstream-merge cost, and how we keep it small
+
+This repo tracks `actualbudget/actual`. Editing every catch site in upstream packages adds merge
+surface. The operator has decided that complete error coverage is worth that cost. The spec keeps
+the cost small in four ways:
+
+- **Each edit is small.** It is one import, one module constant, and a one-line change at each
+  site. A conflict at a site is a two-line conflict with an obvious resolution: keep upstream's
+  new logic and re-apply the one call.
+- **The central nets do most of the work.** N6 alone turns every existing `captureException` call
+  into a reporting call with **zero** edits at those call sites.
+- **New code arrives already checked.** After a merge, `yarn lint` flags any new unreported catch
+  that upstream introduced, so coverage cannot silently regress.
+- **The library itself is a new package that upstream never touches.**
+
+---
+
+## 17. Use cases
+
+1. **The OFX import did nothing.** The operator runs `tail ~/T/actual_budget/error.err` and sees:
+
+   ```
+   [worker] [loot-core/src/server/accounts/app.ts] importing transactions — Error: Invalid date format
+   ```
+
+   Before this spec, that error went only to the worker console.
+
+2. **`abx statements import` returned `internal`.** The error hint now points at `error.err`, and
+   the machine-plane record has the full stack. Before, it was dropped in `toMachineError`.
+
+3. **The sync server is down and the laptop is asleep.** One WARN per 10 minutes, not thousands of
+   lines.
+
+4. **A report page crashes on render.** The boundary shows its fallback, and `error.err` holds the
+   component stack plus the JS stack, tagged `[web]`.
+
+5. **A rejected thunk in Redux.** Before, it went to `console.error` plus a toast. Now it is also in
+   the file, with the action type.
+
+6. **Electron's utility process dies.** `child-process-gone` is recorded by the main process with
+   the reason and the exit code.
+
+7. **An upstream merge adds a new `catch {}`.** `yarn lint` fails with
+   `actual/catch-must-report`, and the fix is one line.
+
+8. **A crash at boot, before any sink is installed.** The pre-install queue holds the record, and
+   the process-level `uncaughtException` handler flushes it.
+
+---
+
+## 18. Acceptance criteria
+
+1. `packages/error-file/` exists with zero runtime dependencies, the exports in §4.1, and every
+   test in §14.1 green.
+2. `~/T/actual_budget/error.err` is created lazily at mode `0600` and rotates at 5 MiB × 5.
+3. Every net N1–N20 in §7 is wired, and each has a canary (§14.3), except Electron on CI.
+4. `actual/catch-must-report` is enabled at `"error"`, with its tests. `yarn lint` passes.
+5. `scripts/error-file-coverage.mjs` reports 100% compliant or net-covered, with 0 violating and 0
+   unwired files.
+6. No call site formats an error, reads `err.stack`, or touches `fs` to report (R2). A grep for
+   `console.error(e` / `console.log(err` in `catch` blocks in scope returns 0.
+7. The `cli/` and `mcp/` vendor copies pass the drift test.
+8. `yarn typecheck`, `yarn test` and `yarn lint` are green.
+9. The machine-plane `internal` hint and the `abx` hints point at `error.err`.
+10. The diff contains no private data (§11.6).
+
+---
+
+## 19. Invariants recap
+
+- **One file, one library, one line per site.**
+- **Zero cost until an error happens.** No sync fs on the request path.
+- **Each error object is written once.** A burst is one line.
+- **Expected failures and gate refusals are answers, not faults.** But they are still marked
+  explicitly at the site.
+- **The browser delivers; it never writes.** The ingest route is loopback-only and write-only.
+- **A fault survives the crash that caused it.**
+- **The library never throws, never recurses, never blocks, never logs secrets or ledger data.**
+- **Coverage is proven by lint and a script,** not by convention.
+
+---
+
+## 20. Related specs
+
+- [apis.mdx](./apis.mdx) — the machine plane. The `internal` detail "is in the log": that log is
+  now `error.err` (§7 N11).
+- [cli.mdx](./cli.mdx) §15 — `cli.info`/`cli.err` keep their jobs. Faults are also written to
+  `error.err` (§7 N18).
+- [mcp.mdx](./mcp.mdx) §16 — `mcp.info`/`mcp.err` keep their jobs, and stdout stays pure (§7 N19).
+- Sister-app references (read-only):
+  - `~/BGit/all/app/pm/local_storage.mdx` §6–§8;
+  - `~/BGit/act3/we_citizens/pm/errors.mdx`;
+  - `~/BGit/Bryan_git/LargeFileBridge/pm/debugging.mdx`.

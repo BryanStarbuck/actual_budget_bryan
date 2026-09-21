@@ -1,10 +1,13 @@
 // @ts-strict-ignore
-import { logger } from '#platform/server/log';
+import { errorFileFor } from '@actual-app/error-file';
+
 import { handlers } from '#server/main';
 
 import { importActual } from './actual';
 import * as YNAB4 from './ynab4';
 import * as YNAB5 from './ynab5';
+
+const errors = errorFileFor('loot-core/src/server/importers/index.ts');
 
 export type ImportableBudgetType = 'ynab4' | 'ynab5' | 'actual';
 
@@ -35,7 +38,8 @@ export async function handleBudgetImport(
       data = importer.parseFile(buffer);
       budgetName = importer.getBudgetName(filepath, data);
     } catch (e) {
-      logger.error('failed to parse file', e);
+      // An unreadable file is answered with 'not-<type>' below (R7)
+      errors.warn('parsing the budget file to import', e, { type });
     }
     if (!budgetName) {
       return { error: 'not-' + type };
@@ -44,13 +48,13 @@ export async function handleBudgetImport(
     try {
       await handlers['api/start-import']({ budgetName });
     } catch (e) {
-      logger.error('failed to start import', e);
+      errors.caught('starting the budget import', e, { type });
       return { error: 'unknown' };
     }
     await importer.doImport(data);
   } catch (e) {
     await handlers['api/abort-import']();
-    logger.error('failed to run import', e);
+    errors.caught('running the budget import', e, { type });
     return { error: 'unknown' };
   }
 

@@ -1,11 +1,28 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as asyncStorage from '#platform/server/asyncStorage';
-import { logger } from '#platform/server/log';
 import { createApp } from '#server/app';
 import * as encryption from '#server/encryption';
 import { PostError } from '#server/errors';
 import { get, post } from '#server/post';
 import { getServer, isValidBaseURL } from '#server/server-config';
 import type { OpenIdConfig } from '#types/models';
+
+const errors = errorFileFor('loot-core/src/server/auth/app.ts');
+
+// A PostError carrying one of these reasons means the server could not be reached or did not
+// answer sensibly: a fault. Any other reason (bad password, already bootstrapped, unauthorized) is
+// the server's answer to the request, not a fault (R7).
+const POST_FAULT_REASONS = new Set([
+  'network-failure',
+  'parse-json',
+  'internal',
+  'unknown',
+]);
+
+function isServerAnswer(err: unknown): boolean {
+  return err instanceof PostError && !POST_FAULT_REASONS.has(err.reason);
+}
 
 export type AuthHandlers = {
   'get-did-bootstrap': typeof didBootstrap;
@@ -52,14 +69,20 @@ async function needsBootstrap({ url }: { url?: string } = {}) {
     if (!serverConfig) {
       return { bootstrapped: true, hasServer: false };
     }
-  } catch {
+  } catch (e) {
+    errors.caught('resolving the server config', e);
     return { error: 'get-server-failure' };
   }
 
   let resText: string;
   try {
     resText = await get(serverConfig.SIGNUP_SERVER + '/needs-bootstrap');
-  } catch {
+  } catch (e) {
+    if (isServerAnswer(e)) {
+      errors.expected('asking the server whether it needs bootstrap', e);
+    } else {
+      errors.caught('asking the server whether it needs bootstrap', e);
+    }
     return { error: 'network-failure' };
   }
 
@@ -79,7 +102,8 @@ async function needsBootstrap({ url }: { url?: string } = {}) {
 
   try {
     res = JSON.parse(resText);
-  } catch {
+  } catch (e) {
+    errors.caught('parsing the needs-bootstrap response', e);
     return { error: 'parse-failure' };
   }
 
@@ -105,6 +129,11 @@ async function bootstrap(loginConfig: {
     await post(serverConfig.SIGNUP_SERVER + '/bootstrap', loginConfig);
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('bootstrapping the server', err);
+      } else {
+        errors.caught('bootstrapping the server', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -129,6 +158,11 @@ async function getLoginMethods() {
     );
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('fetching the login methods', err);
+      } else {
+        errors.caught('fetching the login methods', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -199,7 +233,11 @@ async function getUser() {
       serverPrefs,
     };
   } catch (e) {
-    logger.log(e);
+    if (isServerAnswer(e)) {
+      errors.expected('validating the user token', e);
+    } else {
+      errors.caught('validating the user token', e);
+    }
     return { offline: true };
   }
 }
@@ -221,6 +259,11 @@ async function changePassword({ password }: { password: string }) {
     });
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('changing the password', err);
+      } else {
+        errors.caught('changing the password', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -262,6 +305,11 @@ async function signIn(
     res = await post(serverConfig.SIGNUP_SERVER + '/login', loginInfo);
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('signing in', err);
+      } else {
+        errors.caught('signing in', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -315,6 +363,11 @@ async function enableOpenId(openIdConfig: { openId: OpenIdConfig }) {
     });
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('enabling OpenID on the server', err);
+      } else {
+        errors.caught('enabling OpenID on the server', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -349,6 +402,11 @@ async function getOpenIdConfig({ password }: { password: string }) {
     return null;
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('fetching the OpenID config', err);
+      } else {
+        errors.caught('fetching the OpenID config', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };
@@ -376,6 +434,11 @@ async function enablePassword(passwordConfig: { password: string }) {
     });
   } catch (err) {
     if (err instanceof PostError) {
+      if (isServerAnswer(err)) {
+        errors.expected('enabling password login on the server', err);
+      } else {
+        errors.caught('enabling password login on the server', err);
+      }
       return {
         error: err.reason || 'network-failure',
       };

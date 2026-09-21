@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import { AkahuClient } from 'akahu';
 import type {
   Account,
@@ -17,6 +18,8 @@ import {
   validateSessionMiddleware,
 } from '#util/middlewares';
 import { createMutex } from '#util/mutex';
+
+const errors = errorFileFor('sync-server/src/app-akahu/app-akahu.ts');
 
 type AkahuTransaction = {
   booked: boolean;
@@ -92,6 +95,7 @@ app.post(
         },
       });
     } catch (error) {
+      errors.caught('listing Akahu accounts', error);
       const errorMessage =
         error instanceof Error && error.message ? error.message : String(error);
 
@@ -252,6 +256,7 @@ app.post(
         },
       });
     } catch (error) {
+      errors.caught('fetching Akahu transactions', error, { accountId });
       const errorMessage =
         error instanceof Error && error.message ? error.message : String(error);
 

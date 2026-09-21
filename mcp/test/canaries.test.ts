@@ -112,11 +112,18 @@ describe('no-shell canary (§7.0 T9)', () => {
 
 describe('no-fs-write canary (§7.0 T6)', () => {
   it('only the logger and the credential minter touch the filesystem for writing', () => {
+    // The third writer is the vendored error-file sink (pm/error_err.mdx §4.6): a generated copy
+    // of packages/error-file whose only file is ~/T/actual_budget/error.err, mode 0600.
     const allowed = new Set(['logger.ts', 'credentials.ts']);
+    const vendoredErrorFile =
+      path.join(srcDir, 'vendor', 'error-file') + path.sep;
     const offenders: string[] = [];
 
     for (const file of walk(srcDir, '.ts')) {
-      if (allowed.has(path.basename(file))) {
+      if (
+        allowed.has(path.basename(file)) ||
+        file.startsWith(vendoredErrorFile)
+      ) {
         continue;
       }
       const source = fs.readFileSync(file, 'utf8');

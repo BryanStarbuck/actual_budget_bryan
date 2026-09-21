@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import createDebug from 'debug';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -25,6 +26,9 @@ import {
 import { EnableBankingError } from './utils/errors';
 
 const debug = createDebug('actual:enable-banking:app');
+const errors = errorFileFor(
+  'sync-server/src/app-enablebanking/app-enablebanking.ts',
+);
 
 const app = express();
 export { app as handlers };
@@ -32,6 +36,23 @@ app.use(requestLoggerMiddleware);
 app.use(express.json());
 
 // --- Shared helpers ---
+
+// A 4xx answer from Enable Banking (bad or expired credentials, unknown account, bad input, not
+// configured) is an answer, not a fault (pm/error_err.mdx R7). Anything else — a 5xx, a timeout,
+// a network failure — is reported.
+const EXPECTED_ENABLE_BANKING_CODES = new Set([
+  'INVALID_ACCESS_TOKEN',
+  'INVALID_INPUT',
+  'NOT_FOUND',
+  'NOT_CONFIGURED',
+]);
+
+function isExpectedEnableBankingError(error: unknown): boolean {
+  return (
+    error instanceof EnableBankingError &&
+    EXPECTED_ENABLE_BANKING_CODES.has(error.error_code)
+  );
+}
 
 function extractPsuHeaders(req: Request): PsuHeaders {
   const ip = req.ip;
@@ -74,7 +95,13 @@ async function buildSessionResult(
         );
         balances = balanceResult.balances.map(normalizeBalance);
       } catch (err) {
-        debug('Failed to fetch balances for account %s: %s', account.uid, err);
+        if (isExpectedEnableBankingError(err)) {
+          errors.expected('fetching Enable Banking account balances', err);
+        } else {
+          errors.caught('fetching Enable Banking account balances', err, {
+            accountUid: account.uid,
+          });
+        }
       }
 
       const preferredBalance =
@@ -158,7 +185,11 @@ app.get('/auth_callback', async (req: Request, res: Response) => {
       cleanupPendingAuth(state);
     }
 
-    debug('Callback auth error: %s', error);
+    if (isExpectedEnableBankingError(error)) {
+      errors.expected('completing the Enable Banking auth callback', error);
+    } else {
+      errors.caught('completing the Enable Banking auth callback', error);
+    }
     res
       .status(500)
       .send(
@@ -237,7 +268,11 @@ app.post(
       );
       debug('Enable Banking application validated: %o', appInfo);
     } catch (error) {
-      debug('Enable Banking configuration validation failed: %s', error);
+      if (isExpectedEnableBankingError(error)) {
+        errors.expected('validating the Enable Banking credentials', error);
+      } else {
+        errors.caught('validating the Enable Banking credentials', error);
+      }
       res.send({
         status: 'ok',
         data: {
@@ -274,6 +309,11 @@ app.post(
         data: aspsps,
       });
     } catch (error) {
+      if (isExpectedEnableBankingError(error)) {
+        errors.expected('listing Enable Banking banks', error);
+      } else {
+        errors.caught('listing Enable Banking banks', error);
+      }
       res.send({
         status: 'ok',
         data: {
@@ -319,6 +359,11 @@ app.post(
         },
       });
     } catch (error) {
+      if (isExpectedEnableBankingError(error)) {
+        errors.expected('starting the Enable Banking authorization', error);
+      } else {
+        errors.caught('starting the Enable Banking authorization', error);
+      }
       res.send({
         status: 'ok',
         data: {
@@ -372,6 +417,11 @@ app.post(
         data: result,
       });
     } catch (error) {
+      if (isExpectedEnableBankingError(error)) {
+        errors.expected('completing the Enable Banking authorization', error);
+      } else {
+        errors.caught('completing the Enable Banking authorization', error);
+      }
       const errorResult = {
         error: error instanceof Error ? error.message : 'unknown error',
       };
@@ -474,6 +524,9 @@ app.post(
         data: result,
       });
     } catch (error) {
+      // Superseded, timed out, or disconnected polls are normal outcomes; a failed callback was
+      // already reported where it happened.
+      errors.expected('waiting for the Enable Banking authorization', error);
       cleanupPendingAuth(state, waiterId);
       if (hasClientDisconnected || res.destroyed || res.writableEnded) {
         return;
@@ -577,7 +630,13 @@ app.post(
         },
       });
     } catch (error) {
-      debug('Error fetching transactions: %s', error);
+      if (isExpectedEnableBankingError(error)) {
+        errors.expected('fetching Enable Banking transactions', error);
+      } else {
+        errors.caught('fetching Enable Banking transactions', error, {
+          accountId,
+        });
+      }
 
       // Return structured error codes so the client can show
       // appropriate UI (e.g. re-auth prompt for expired sessions)

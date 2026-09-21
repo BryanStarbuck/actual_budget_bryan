@@ -1,3 +1,4 @@
+import { setErrorSink } from '@actual-app/error-file';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,6 +25,16 @@ vi.mock('express-rate-limit', () => ({
 }));
 
 global.fetch = vi.fn();
+
+// Captures what the module reports to the error file (pm/error_err.mdx R13, §14.4).
+const errorFileWrite = vi.fn();
+setErrorSink({
+  app: 'test',
+  echo: false,
+  verbose: false,
+  write: errorFileWrite,
+  flush: () => {},
+});
 
 describe('app-cors-proxy', () => {
   const defaultAllowlistedRepos = [
@@ -166,6 +177,7 @@ describe('app-cors-proxy', () => {
     vi.spyOn(console, 'log').mockImplementation(vi.fn());
     vi.spyOn(console, 'warn').mockImplementation(vi.fn());
     vi.spyOn(console, 'error').mockImplementation(vi.fn());
+    errorFileWrite.mockClear();
   });
 
   describe('CORS preflight', () => {
@@ -341,9 +353,13 @@ describe('app-cors-proxy', () => {
         .query({ url: 'https://github.com/user/repo1' });
 
       expect(res.statusCode).toBe(403);
-      expect(console.error).toHaveBeenCalledWith(
-        'Failed to fetch plugin allowlist:',
-        expect.any(Error),
+      expect(errorFileWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'ERROR',
+          where: 'sync-server/src/app-cors-proxy.js',
+          doing: 'fetching the plugin allowlist',
+          error: expect.stringContaining('Network error'),
+        }),
       );
 
       global.fetch = createFetchMock({
@@ -362,9 +378,13 @@ describe('app-cors-proxy', () => {
         .query({ url: 'https://github.com/user/repo1' });
 
       expect(res.statusCode).toBe(403);
-      expect(console.error).toHaveBeenCalledWith(
-        'Failed to fetch plugin allowlist:',
-        expect.any(Error),
+      expect(errorFileWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'ERROR',
+          where: 'sync-server/src/app-cors-proxy.js',
+          doing: 'fetching the plugin allowlist',
+          error: expect.stringContaining('404'),
+        }),
       );
 
       global.fetch = createFetchMock({

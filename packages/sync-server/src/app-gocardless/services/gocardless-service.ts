@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
 import { BankFactory } from '#app-gocardless/bank-factory';
@@ -40,6 +41,10 @@ import { SecretName, secretsService } from '#services/secrets-service';
 
 import type { AccountDetailsResponse, TokenResponse } from './gocardless-api';
 import { GoCardlessApi, GoCardlessApiError } from './gocardless-api';
+
+const errors = errorFileFor(
+  'sync-server/src/app-gocardless/services/gocardless-service.ts',
+);
 
 const clients = new Map<string, GoCardlessApi>();
 
@@ -121,7 +126,9 @@ export const goCardlessService = {
         );
         const clockTimestamp = Math.floor(Date.now() / 1000);
         return clockTimestamp >= payload.exp;
-      } catch {
+      } catch (e) {
+        // A token that does not decode is simply treated as expired.
+        errors.expected('decoding the GoCardless token expiry', e);
         return true;
       }
     };
@@ -338,12 +345,17 @@ export const goCardlessService = {
       supportedFeatures: institution.supported_features,
     });
 
-    const response = await client.initSession(body).catch(async () => {
-      console.log('Failed to link using:');
-      console.log(body);
-      console.log(
-        'Falling back to accessValidForDays = 90 ' +
-          'and maxHistoricalDays = 89',
+    const response = await client.initSession(body).catch(async e => {
+      // The first attempt uses the institution's own limits; the retry below
+      // falls back to accessValidForDays = 90 and maxHistoricalDays = 89.
+      errors.caught(
+        'creating a GoCardless requisition with the institution limits',
+        e,
+        {
+          institutionId,
+          accessValidForDays: body.accessValidForDays,
+          maxHistoricalDays: body.maxHistoricalDays,
+        },
       );
 
       return await client

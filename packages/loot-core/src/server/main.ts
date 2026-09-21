@@ -1,8 +1,11 @@
 // @ts-strict-ignore
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
+import { installBrowserErrorFile } from '@actual-app/error-file/browser';
+
 import * as asyncStorage from '#platform/server/asyncStorage';
 import * as connection from '#platform/server/connection';
 import * as fs from '#platform/server/fs';
-import { logger, setVerboseMode } from '#platform/server/log';
+import { setVerboseMode } from '#platform/server/log';
 import * as sqlite from '#platform/server/sqlite';
 import { q } from '#shared/query';
 import { amountToInteger, integerToAmount } from '#shared/util';
@@ -44,6 +47,8 @@ import { app as transactionsApp } from './transactions/app';
 import * as rules from './transactions/transaction-rules';
 import { redo, undo } from './undo';
 
+const errors = errorFileFor('loot-core/src/server/main.ts');
+
 // handlers
 
 // need to work around the type system here because the object
@@ -84,7 +89,8 @@ handlers['get-server-version'] = async function () {
 
     const info = JSON.parse(res);
     version = info.build.version;
-  } catch {
+  } catch (e) {
+    errors.caught('fetching the server version', e);
     return { error: 'network-failure' };
   }
 
@@ -121,7 +127,7 @@ handlers['set-server-url'] = async function ({ url, validate = true }) {
 handlers['app-focused'] = async function () {
   if (prefs.getPrefs() && prefs.getPrefs().id) {
     // First we sync
-    void fullSync();
+    reportRejection(errors, 'syncing after the app was focused', fullSync());
   }
 };
 
@@ -173,7 +179,9 @@ async function setupDocumentsDir() {
   if (documentDir) {
     try {
       await ensureExists(documentDir);
-    } catch {
+    } catch (e) {
+      // The saved folder is gone or unusable; fall back to the default one.
+      errors.warn('checking the saved document directory', e);
       documentDir = null;
     }
   }
@@ -211,6 +219,23 @@ async function ensureUsable(dir) {
   await fs.removeDir(probeDir);
 }
 
+// pm/error_err.mdx §7 N2. The web worker's bootstrap (desktop-client/src/browser-server.js) is a
+// classic script that is not bundled, so it cannot import the library itself; it calls these on
+// the `backend` global right after importScripts() loads this bundle. The `where` is the worker's
+// own file on purpose: these records belong to browser-server.js, not to the bundle hosting the call.
+export const workerErrors = errorFileFor(
+  // oxlint-disable-next-line actual/catch-must-report
+  'desktop-client/src/browser-server.js',
+);
+
+export function installWorkerErrorFile(isDev) {
+  installBrowserErrorFile({
+    app: 'worker',
+    where: 'desktop-client/src/browser-server.js',
+    echo: !!isDev,
+  });
+}
+
 export async function initApp(isDev, socketName) {
   await sqlite.init();
   asyncStorage.init();
@@ -229,7 +254,7 @@ export async function initApp(isDev, socketName) {
         }),
       );
     } catch (e) {
-      logger.log('Error loading key', e);
+      errors.caught('loading the saved encryption keys', e);
       throw new Error('load-key-error');
     }
   }

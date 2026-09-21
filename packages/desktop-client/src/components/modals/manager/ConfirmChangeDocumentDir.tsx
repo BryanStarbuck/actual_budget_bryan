@@ -5,6 +5,7 @@ import { Button, ButtonWithLoading } from '@actual-app/components/button';
 import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Information } from '#components/alerts';
 import { DirectoryDisplay } from '#components/common/DirectoryDisplay';
@@ -13,6 +14,10 @@ import { Checkbox } from '#components/forms';
 import { useGlobalPref } from '#hooks/useGlobalPref';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/manager/ConfirmChangeDocumentDir.tsx',
+);
 
 export function ConfirmChangeDocumentDirModal({
   currentBudgetDirectory,
@@ -59,7 +64,7 @@ export function ConfirmChangeDocumentDirModal({
       );
       close();
     } catch (error) {
-      console.error('There was an error changing your directory', error);
+      errors.caught('changing the data directory', error);
       setError(
         t(
           'There was an error changing your directory, please check the directory and try again.',

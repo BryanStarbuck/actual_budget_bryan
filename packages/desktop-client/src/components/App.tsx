@@ -13,6 +13,7 @@ import {
   init as initConnection,
   send,
 } from '@actual-app/core/platform/client/connection';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { setAppState, sync } from '#app/appSlice';
@@ -44,6 +45,13 @@ import { ManagementApp } from './manager/ManagementApp';
 import { Modals } from './Modals';
 import { SidebarProvider } from './sidebar/SidebarProvider';
 import { UpdateNotification } from './UpdateNotification';
+
+const errors = errorFileFor('desktop-client/src/components/App.tsx');
+const reportAppShellError = reportBoundaryError(
+  errors,
+  'rendering the app shell',
+);
+const reportModalsError = reportBoundaryError(errors, 'rendering the modals');
 
 function AppInner() {
   const [budgetId] = useMetadataPref('id');
@@ -225,7 +233,10 @@ export function App() {
                       ...styles.lightScrollbar,
                     }}
                   >
-                    <ErrorBoundary FallbackComponent={ErrorFallback}>
+                    <ErrorBoundary
+                      FallbackComponent={ErrorFallback}
+                      onError={reportAppShellError}
+                    >
                       {import.meta.env.REACT_APP_REVIEW_ID && !isTestEnv && (
                         <DevelopmentTopBar />
                       )}
@@ -233,7 +244,10 @@ export function App() {
                     </ErrorBoundary>
                     <ThemeStyle />
                     <CustomThemeStyle />
-                    <ErrorBoundary FallbackComponent={FatalError}>
+                    <ErrorBoundary
+                      FallbackComponent={FatalError}
+                      onError={reportModalsError}
+                    >
                       <Modals />
                     </ErrorBoundary>
                     <UpdateNotification />

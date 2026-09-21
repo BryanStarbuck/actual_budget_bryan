@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import * as d from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -42,6 +43,8 @@ import type {
 } from '#types/models';
 
 import { findSchedules } from './find-schedules';
+
+const errors = errorFileFor('loot-core/src/server/schedules/app.ts');
 
 // Utilities
 
@@ -488,7 +491,7 @@ async function getUpcomingDates({ config, count }) {
       .map(date => dayFromDate(date));
   } catch (err) {
     captureBreadcrumb(config);
-    throw err;
+    errors.rethrow('computing the upcoming dates of a schedule', err);
   }
 }
 
@@ -619,8 +622,11 @@ async function advanceRecurringScheduleFromNextDate(
 
   try {
     await setNextDate({ id: schedule.id, advance: true });
-  } catch {
+  } catch (e) {
     // This might error if the rule is corrupted and it can't find the rule.
+    errors.warn('advancing the next date of a schedule', e, {
+      scheduleId: schedule.id,
+    });
     return null;
   }
 
@@ -754,9 +760,12 @@ export async function advanceSchedulesService(syncSuccess) {
         if (isRecurringSchedule(schedule)) {
           try {
             await setNextDate({ id: schedule.id });
-          } catch {
+          } catch (e) {
             // This might error if the rule is corrupted and it can't
             // find the rule
+            errors.warn('moving a paid schedule to its next date', e, {
+              scheduleId: schedule.id,
+            });
           }
         } else {
           if (schedule._date < currentDay()) {

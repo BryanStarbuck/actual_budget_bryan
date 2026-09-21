@@ -122,6 +122,6 @@ export function toMachineError(err: unknown): MachineError {
   return new MachineError(
     'internal',
     'The request failed inside the app.',
-    'read ~/T/_actual_budget/server.log',
+    'read ~/T/actual_budget/error.err',
   );
 }

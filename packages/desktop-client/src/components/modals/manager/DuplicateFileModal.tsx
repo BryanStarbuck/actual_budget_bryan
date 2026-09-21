@@ -10,6 +10,7 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { duplicateBudget } from '#budgetfiles/budgetfilesSlice';
 import {
@@ -21,6 +22,10 @@ import {
 import type { Modal as ModalType } from '#modals/modalsSlice';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/manager/DuplicateFileModal.tsx',
+);
 
 type DuplicateFileModalProps = Extract<
   ModalType,
@@ -48,9 +53,13 @@ export function DuplicateFileModal({
   );
 
   useEffect(() => {
-    void (async () => {
-      setNewName(await uniqueBudgetName(file.name + fileEndingTranslation));
-    })();
+    reportRejection(
+      errors,
+      'finding a unique name for the duplicate budget',
+      (async () => {
+        setNewName(await uniqueBudgetName(file.name + fileEndingTranslation));
+      })(),
+    );
   }, [file.name, fileEndingTranslation]);
 
   const validateAndSetName = async (name: string) => {
@@ -91,9 +100,9 @@ export function DuplicateFileModal({
         );
         if (onComplete) onComplete({ status: 'success' });
       } catch (e) {
+        errors.caught('duplicating the budget file', e);
         const newError = new Error(t('Failed to duplicate budget file'));
         if (onComplete) onComplete({ status: 'failed', error: newError });
-        else console.error('Failed to duplicate budget file:', e);
         dispatch(
           addNotification({
             notification: {

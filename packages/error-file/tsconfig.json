@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "composite": true,
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    // Relative imports carry .ts so Node (type stripping), Vite and plain tsc (cli/, mcp/ with
+    // rewriteRelativeImportExtensions) all resolve the same source — pm/error_err.mdx §4.6.
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": true,
+    "strict": true,
+    // The same strictness cli/ and mcp/ compile the vendored copy under (pm/error_err.mdx §4.6).
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["./src/"]
+}

@@ -1,8 +1,23 @@
+import { errorFileFor } from '@actual-app/error-file';
 import type { NextFunction, Request, Response } from 'express';
 import * as expressWinston from 'express-winston';
 import * as winston from 'winston';
 
 import { validateSession } from './validate-user';
+
+const errors = errorFileFor('sync-server/src/util/middlewares.ts');
+
+/**
+ * The route TEMPLATE of a request (`/sync/upload-user-file`, `/admin/users/:id`), never the raw URL:
+ * no query string, no ids, no body (pm/error_err.mdx §11.4).
+ */
+function routeOf(req: Request): string {
+  const template = req.route?.path;
+  return (
+    `${req.baseUrl ?? ''}${typeof template === 'string' ? template : ''}` ||
+    '(no route)'
+  );
+}
 
 async function errorMiddleware(
   err: Error,
@@ -23,10 +38,7 @@ async function errorMiddleware(
     return next(err);
   }
 
-  console.log(`Error on endpoint %s`, {
-    requestUrl: req.url,
-    stacktrace: err.stack,
-  });
+  errors.caught(`handling ${req.method} ${routeOf(req)}`, err);
   res.status(500).send({ status: 'error', reason: 'internal-error' });
 }
 
@@ -60,4 +72,9 @@ const requestLoggerMiddleware = expressWinston.logger({
   ),
 });
 
-export { validateSessionMiddleware, errorMiddleware, requestLoggerMiddleware };
+export {
+  validateSessionMiddleware,
+  errorMiddleware,
+  requestLoggerMiddleware,
+  routeOf,
+};

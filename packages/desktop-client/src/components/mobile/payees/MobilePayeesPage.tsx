@@ -7,6 +7,7 @@ import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import { getNormalisedString } from '@actual-app/core/shared/normalisation';
 import type { PayeeEntity, RuleEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Search } from '#components/common/Search';
 import { MobilePageHeader, Page } from '#components/Page';
@@ -18,6 +19,10 @@ import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
 
 import { PayeesList } from './PayeesList';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/payees/MobilePayeesPage.tsx',
+);
 
 export function MobilePayeesPage() {
   const { t } = useTranslation();
@@ -58,7 +63,9 @@ export function MobilePayeesPage() {
           void navigate(`/rules?visible-rules=${ruleIds}`);
           return;
         } catch (error) {
-          console.error('Failed to fetch payee rules:', error);
+          errors.caught('fetching the rules for a payee', error, {
+            id: payee.id,
+          });
           // Fallback to general rules page
           void navigate('/rules');
           return;
@@ -94,7 +101,7 @@ export function MobilePayeesPage() {
           }),
         });
       } catch (error) {
-        console.error('Failed to delete payee:', error);
+        errors.caught('deleting a payee', error, { id: payee.id });
         dispatch(
           addNotification({
             notification: {

@@ -1,6 +1,7 @@
 {
   "references": [
     { "path": "./packages/crdt" },
+    { "path": "./packages/error-file" },
     { "path": "./packages/component-library" },
     { "path": "./packages/plugins-service" },
     { "path": "./packages/loot-core" },

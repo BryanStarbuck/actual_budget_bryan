@@ -1,7 +1,7 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import * as dateFns from 'date-fns';
 
-import { logger } from '#platform/server/log';
 import {
   addDays,
   isAfter,
@@ -25,6 +25,8 @@ import {
   parseDateString,
   parseRecurDate,
 } from './rule-utils';
+
+const errors = errorFileFor('loot-core/src/server/rules/condition.ts');
 
 export const CONDITION_TYPES = {
   date: {
@@ -422,7 +424,8 @@ export class Condition {
         try {
           return new RegExp(this.value).test(fieldValue);
         } catch (e) {
-          logger.log('invalid regexp in matches condition', e);
+          // A bad user pattern is an answer, not a fault (R7)
+          errors.expected('compiling the regexp of a matches condition', e);
           return false;
         }
 

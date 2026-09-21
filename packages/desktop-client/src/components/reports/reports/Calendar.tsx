@@ -26,6 +26,7 @@ import type {
   TimeFrame,
   TransactionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { css } from '@emotion/css';
 import { useDrag } from '@use-gesture/react';
 import { format as formatDate, parseISO } from 'date-fns';
@@ -68,6 +69,10 @@ import { useTransactions } from '#hooks/useTransactions';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
 import { useUpdateDashboardWidgetMutation } from '#reports/mutations';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/reports/Calendar.tsx',
+);
 
 const CHEVRON_HEIGHT = 42;
 const SUMMARY_HEIGHT = 140;
@@ -218,7 +223,7 @@ function CalendarInner({ widget, parameters }: CalendarInnerProps) {
         setQuery(query.options({ splits: 'grouped' }));
       })
       .catch((error: unknown) => {
-        console.error('Error generating filters:', error);
+        errors.caught('building the calendar transaction filters', error);
       });
   }, [start, end, conditions, conditionsOp, sortField, ascDesc]);
 
@@ -296,7 +301,7 @@ function CalendarInner({ widget, parameters }: CalendarInnerProps) {
 
       setAllMonths(allMonths);
     }
-    void run();
+    reportRejection(errors, 'loading the calendar month range', run());
   }, [locale]);
 
   useEffect(() => {
@@ -388,7 +393,7 @@ function CalendarInner({ widget, parameters }: CalendarInnerProps) {
               },
             }),
           );
-          console.error('Error saving widget:', error);
+          errors.caught('saving the calendar widget', error);
         },
       },
     );

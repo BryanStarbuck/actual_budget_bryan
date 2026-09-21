@@ -11,6 +11,7 @@ import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { isElectron } from '@actual-app/core/shared/environment';
 import { LazyLoadFailedError } from '@actual-app/core/shared/errors';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { useModalState } from '#hooks/useModalState';
 
@@ -18,6 +19,8 @@ import { DirectoryDisplay } from './common/DirectoryDisplay';
 import { Link } from './common/Link';
 import { Modal, ModalHeader } from './common/Modal';
 import { Checkbox } from './forms';
+
+const errors = errorFileFor('desktop-client/src/components/FatalError.tsx');
 
 const DATA_FOLDER_DOCS_URL =
   'https://actualbudget.org/docs/troubleshooting/data-folder-access';
@@ -210,8 +213,8 @@ function ChooseDocumentDirButton() {
       window.Actual.relaunch();
     } catch (error) {
       // The raw failure (path, IPC wrapping, OS error text) goes to the
-      // console for diagnosis; the user gets a plain explanation.
-      console.error('Could not change the data folder', error);
+      // error file for diagnosis; the user gets a plain explanation.
+      errors.caught('changing the data folder', error);
       setChooseError(
         t(
           "That folder can't be used. Make sure it exists and that Actual is allowed to create files in it.",

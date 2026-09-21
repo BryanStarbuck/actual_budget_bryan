@@ -12,6 +12,7 @@
     "typecheck": "tsgo -b && tsc-strict"
   },
   "dependencies": {
+    "@actual-app/error-file": "workspace:*",
     "workbox-precaching": "^7.4.1"
   },
   "devDependencies": {

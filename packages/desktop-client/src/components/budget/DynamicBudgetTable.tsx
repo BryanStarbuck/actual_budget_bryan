@@ -1,4 +1,3 @@
-// @ts-strict-ignore
 import React, { useEffect } from 'react';
 import type { ComponentProps } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -7,6 +6,8 @@ import { AutoSizer } from 'react-virtualized-auto-sizer';
 
 import { View } from '@actual-app/components/view';
 import * as monthUtils from '@actual-app/core/shared/months';
+// @ts-strict-ignore
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import { useFeatureFlag } from '#hooks/useFeatureFlag';
@@ -15,6 +16,14 @@ import { useGlobalPref } from '#hooks/useGlobalPref';
 import { useBudgetMonthCount } from './BudgetMonthCountContext';
 import { BudgetPageHeader } from './BudgetPageHeader';
 import { BudgetTable } from './BudgetTable';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/budget/DynamicBudgetTable.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering the budget table',
+);
 
 function getNumPossibleMonths(width: number, categoryWidth: number) {
   const estimatedTableWidth = width - categoryWidth;
@@ -148,7 +157,10 @@ const DynamicBudgetTable = ({
       }}
     >
       <View style={{ width: '100%', maxWidth }}>
-        <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+        <ErrorBoundary
+          onError={reportRenderError}
+          FallbackComponent={FeatureErrorFallback}
+        >
           <BudgetPageHeader
             startMonth={prewarmStartMonth}
             numMonths={numMonths}

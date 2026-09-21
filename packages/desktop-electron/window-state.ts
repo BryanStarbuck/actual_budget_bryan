@@ -4,6 +4,10 @@ import path from 'path';
 import electron from 'electron';
 import type { BrowserWindow } from 'electron';
 
+import { errorFileFor, guard } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('desktop-electron/window-state.ts');
+
 type WindowState = Electron.Rectangle & {
   isMaximized?: boolean;
   isFullScreen?: boolean;
@@ -18,14 +22,28 @@ const getDataDir = () => {
   return process.env.ACTUAL_DATA_DIR;
 };
 
+function isEnoent(e: unknown): boolean {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    (e as { code?: unknown }).code === 'ENOENT'
+  );
+}
+
 async function loadState() {
   let state: WindowState | undefined = undefined;
   try {
     state = JSON.parse(
       fs.readFileSync(path.join(getDataDir(), 'window.json'), 'utf8'),
     );
-  } catch {
-    console.log('Could not load window state');
+  } catch (e) {
+    // No window.json yet on a first run; anything else is a real fault
+    if (isEnoent(e)) {
+      errors.expected('reading the optional window.json', e);
+    } else {
+      errors.caught('reading window.json', e);
+    }
   }
 
   return validateState(state);
@@ -63,7 +81,11 @@ export function listen(win: BrowserWindow, state: WindowState) {
     win.setFullScreen(true);
   }
 
-  const saver = saveState.bind(null, win, state);
+  const saver = guard(
+    errors,
+    'saving the window state',
+    saveState.bind(null, win, state),
+  );
 
   win.on('close', saver);
 

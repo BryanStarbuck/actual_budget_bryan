@@ -21,6 +21,7 @@ import type {
   ExportImportDashboard,
   MarkdownWidget,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { MOBILE_NAV_HEIGHT } from '#components/mobile/MobileNavTabs';
 import { MobilePageHeader, Page } from '#components/Page';
@@ -69,6 +70,14 @@ import { NetWorthCard } from './reports/NetWorthCard';
 import { SankeyCard } from './reports/SankeyCard';
 import { SpendingCard } from './reports/SpendingCard';
 import { SummaryCard } from './reports/SummaryCard';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/Overview.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering a dashboard widget',
+);
 
 function isCustomReportWidget(
   widget: DashboardWidgetEntity,
@@ -792,6 +801,7 @@ export function Overview({ dashboard }: OverviewProps) {
                   return (
                     <div key={item.i}>
                       <ErrorBoundary
+                        onError={reportRenderError}
                         fallbackRender={() => (
                           <MissingReportCard
                             widgetId={item.i}

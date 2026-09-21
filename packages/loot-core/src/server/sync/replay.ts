@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { captureException } from '#platform/exceptions';
 import { logger } from '#platform/server/log';
 import * as db from '#server/db';
@@ -11,6 +13,8 @@ import {
   quoteSqlId,
   resetDeferredMessagesNotification,
 } from './utils';
+
+const errors = errorFileFor('loot-core/src/server/sync/replay.ts');
 
 // SQLite failures that repeat identically on every attempt. Anything
 // else non-schema (locked/full/interrupted/storage errors) may be
@@ -73,9 +77,10 @@ export function replayPendingMessages(): void {
       let value;
       try {
         value = deserializeValue(msg.value);
-      } catch {
+      } catch (e) {
         // A value format from an even newer version; decodes after the
         // user updates
+        errors.expected('decoding a pending sync message value', e);
         return { outcome: 'newer-version' };
       }
       try {
@@ -103,6 +108,7 @@ export function replayPendingMessages(): void {
       } catch (e) {
         if (isMissingSchemaError(e)) {
           // Still targets schema from an even newer version
+          errors.expected('applying a pending sync message', e);
           return { outcome: 'newer-version' };
         }
         const error = e instanceof Error ? e : new Error(String(e));
@@ -110,8 +116,9 @@ export function replayPendingMessages(): void {
           // Possibly transient — and errors like disk-full force SQLite
           // to roll back the enclosing transaction, so continuing would
           // run in autocommit. Abort; everything stays pending.
-          throw error;
+          errors.rethrow('applying a pending sync message', error);
         }
+        // Retried on the next pass; reported below only if it never applies
         return { outcome: 'failed', error };
       }
     }
@@ -176,7 +183,7 @@ export function replayPendingMessages(): void {
   } catch (e) {
     // Possibly-transient abort: nothing was dropped, everything retries
     // on the next load — telemetry only, no user notification
-    captureException(e instanceof Error ? e : new Error(String(e)));
+    errors.caught('replaying the pending sync messages', e);
     return;
   }
 

@@ -1,15 +1,17 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { SQLiteFS } from 'absurd-sql';
 import IndexedDBBackend from 'absurd-sql/dist/indexeddb-backend';
 
 import * as connection from '#platform/server/connection';
 import { join } from '#platform/server/fs/path-join';
 import * as idb from '#platform/server/indexeddb';
-import { logger } from '#platform/server/log';
 import { _getModule } from '#platform/server/sqlite';
 import type { SqlJsModule } from '#platform/server/sqlite';
 
 import { _setDocumentDir as _setDocumentDirShared } from './shared';
+
+const errors = errorFileFor('loot-core/src/platform/server/fs/index.ts');
 
 let FS: SqlJsModule['FS'] = null;
 let BFS = null;
@@ -65,12 +67,16 @@ function _exists(filepath: string): boolean {
   try {
     FS.readlink(filepath);
     return true;
-  } catch {}
+  } catch (e) {
+    errors.expected('probing whether a path is a symlink', e);
+  }
 
   try {
     FS.stat(filepath);
     return true;
-  } catch {}
+  } catch (e) {
+    errors.expected('probing whether a path exists', e);
+  }
   return false;
 }
 
@@ -164,7 +170,8 @@ function resolveLink(path: string): string {
   try {
     const { node } = FS.lookupPath(path, { follow: false });
     return node.link ? FS.readlink(path) : path;
-  } catch {
+  } catch (e) {
+    errors.expected('resolving a possible symlink', e);
     return path;
   }
 }
@@ -241,7 +248,7 @@ async function _copySqlFile(
     tofile.close();
     fromfile.close();
     await _removeFile(toDbPath);
-    logger.error('Failed to copy database file', error);
+    errors.caught('copying the database file block by block', error);
     return false;
   } finally {
     tofile.close();
@@ -341,6 +348,7 @@ export const init = async function () {
   // default files in testing.
   if (process.env.NODE_ENV !== 'test') {
     const backend = new IndexedDBBackend(() => {
+      errors.warn('writing the database in IndexedDB fallback mode');
       connection.send('fallback-write-error');
     });
     BFS = new SQLiteFS(FS, backend);
@@ -387,9 +395,13 @@ export const copyFile = async function (
     result = await _writeFile(topath, contents);
   } catch (error) {
     if (frompath.endsWith('.sqlite') || topath.endsWith('.sqlite')) {
+      // A database file may not be readable as a whole; fall back to a
+      // block-by-block copy.
+      errors.expected('copying a database file in one read', error);
       try {
         result = await _copySqlFile(frompath, topath);
       } catch (secondError) {
+        errors.caught('copying the database file', secondError);
         throw new Error(
           `Failed to copy SQL file from ${frompath} to ${topath}: ${secondError.message}`,
         );

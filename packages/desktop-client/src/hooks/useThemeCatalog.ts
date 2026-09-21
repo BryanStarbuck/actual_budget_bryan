@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import type { CatalogTheme } from '#style/customThemes';
+
+const errors = errorFileFor('desktop-client/src/hooks/useThemeCatalog.ts');
 
 const CATALOG_URL = `https://raw.githubusercontent.com/actualbudget/actual/${import.meta.env.REACT_APP_BRANCH || 'master'}/packages/desktop-client/src/data/customThemeCatalog.json`;
 
@@ -33,6 +37,8 @@ export function useThemeCatalog() {
 
         setData(data);
       } catch (err) {
+        // The catalog lives on GitHub; being offline is the usual cause
+        errors.warn('fetching the theme catalog from GitHub', err);
         setError(
           err instanceof Error ? err.message : 'Failed to load theme catalog',
         );

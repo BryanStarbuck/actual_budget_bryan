@@ -11,6 +11,7 @@ import { Text } from '@actual-app/components/text';
 import { TextOneLine } from '@actual-app/components/text-one-line';
 import { theme as themeStyle } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Link } from '#components/common/Link';
 import { FixedSizeList } from '#components/FixedSizeList';
@@ -27,6 +28,10 @@ import {
 import type { CatalogTheme, InstalledTheme } from '#style/customThemes';
 
 import { ColorPalette } from './ColorPalette';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/settings/ThemeInstaller.tsx',
+);
 
 // Theme item dimensions
 const ITEMS_PER_ROW = 3;
@@ -91,7 +96,9 @@ export function ThemeInstaller({
         const normalizedRepo = normalizeGitHubRepo(catalogTheme.repo);
         const themeId = generateThemeId(normalizedRepo);
         return themeId === installedTheme.id;
-      } catch {
+      } catch (e) {
+        // A catalog entry with an unparseable repo is not installed; a probe, not a fault
+        errors.expected('checking whether a catalog theme is installed', e);
         return false;
       }
     },
@@ -134,6 +141,7 @@ export function ThemeInstaller({
           setSelectedCatalogTheme(options.catalogTheme);
         }
       } catch (err) {
+        errors.caught('installing a theme', err, { themeId: options.id });
         setError(err instanceof Error ? err.message : options.errorMessage);
         // Track which theme failed and clear selection
         if (options.catalogTheme) {
@@ -182,6 +190,8 @@ export function ThemeInstaller({
       setCustomCssOverride(validated);
       setPastedCss(validated);
     } catch (err) {
+      // Pasted CSS that fails validation is user input, not a fault (R7)
+      errors.expected('validating the pasted theme CSS', err);
       setError(
         err instanceof Error ? err.message : t('Failed to validate theme CSS'),
       );

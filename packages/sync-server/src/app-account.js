@@ -20,7 +20,6 @@ import { validateAuthHeader, validateSession } from './util/validate-user';
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(errorMiddleware);
 app.use(requestLoggerMiddleware);
 
 const authRateLimiter = rateLimit({
@@ -208,3 +207,6 @@ app.get('/validate', (req, res) => {
     });
   }
 });
+
+// Registered AFTER the routes so it can actually fire (pm/error_err.mdx §7 N10).
+app.use(errorMiddleware);

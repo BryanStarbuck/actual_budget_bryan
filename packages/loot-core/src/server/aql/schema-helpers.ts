@@ -1,6 +1,10 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { fromDateRepr, toDateRepr } from '#server/models';
 // @ts-strict-ignore
 import { dayFromDate } from '#shared/months';
+
+const errors = errorFileFor('loot-core/src/server/aql/schema-helpers.ts');
 
 function isRequired(name, fieldDesc) {
   return fieldDesc.required || name === 'id';
@@ -76,7 +80,8 @@ export function convertOutputType(value, type) {
     case 'json/fallback':
       try {
         return JSON.parse(value);
-      } catch {
+      } catch (e) {
+        errors.expected('parsing a JSON column value', e);
         return type === 'json/fallback' ? value : null;
       }
     default:

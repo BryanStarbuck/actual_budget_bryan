@@ -4,7 +4,13 @@
 // The SharedWorker entry point (shared-browser-server.js) calls
 // createCoordinator() and wires the result to self.onconnect.
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import { logger } from '#platform/server/log';
+
+const errors = errorFileFor(
+  'loot-core/src/platform/client/browser-server/coordinator.ts',
+);
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -70,7 +76,8 @@ export function createCoordinator({
         if (typeof a === 'object') {
           try {
             return JSON.stringify(a);
-          } catch {
+          } catch (e) {
+            errors.expected('serialising a forwarded console argument', e);
             return String(a);
           }
         }
@@ -875,7 +882,9 @@ export function createCoordinator({
           targetGroup.leaderPort.postMessage({ type: '__to-worker', msg });
         }
       } catch (error) {
-        logger.error('[SharedWorker] Error in message handler:', error);
+        errors.caught('handling a SharedWorker message', error, {
+          type: typeof event.data?.type === 'string' ? event.data.type : '',
+        });
       }
     };
 

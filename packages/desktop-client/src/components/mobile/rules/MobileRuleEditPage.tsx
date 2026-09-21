@@ -8,6 +8,7 @@ import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import { q } from '@actual-app/core/shared/query';
 import type { NewRuleEntity, RuleEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { MobileBackButton } from '#components/mobile/MobileBackButton';
 import { MobilePageHeader, Page } from '#components/Page';
@@ -18,6 +19,10 @@ import { useUndo } from '#hooks/useUndo';
 import { pushModal } from '#modals/modalsSlice';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/rules/MobileRuleEditPage.tsx',
+);
 
 export function MobileRuleEditPage() {
   const { t } = useTranslation();
@@ -59,7 +64,7 @@ export function MobileRuleEditPage() {
           }
         })
         .catch(error => {
-          console.error('Failed to load rule:', error);
+          errors.caught('loading a rule', error, { id });
           // Navigate back to rules list if rule not found
           void navigate('/rules');
         })
@@ -126,7 +131,7 @@ export function MobileRuleEditPage() {
                 });
                 void navigate('/rules');
               } catch (error) {
-                console.error('Failed to delete rule:', error);
+                errors.caught('deleting a rule', error, { id });
                 dispatch(
                   addNotification({
                     notification: {

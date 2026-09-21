@@ -23,6 +23,8 @@ packages/api/@types
 packages/api/test-results
 packages/api/playwright-report
 packages/crdt/dist
+packages/error-file/dist
+packages/error-file/test-results
 packages/desktop-client/build-stats
 packages/desktop-client/dev-dist
 packages/desktop-client/public/kcab

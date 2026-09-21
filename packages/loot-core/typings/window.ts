@@ -53,6 +53,8 @@ type Actual = {
   stopSyncServer: () => Promise<void>;
   isSyncServerRunning: () => Promise<boolean>;
   startOAuthServer: () => Promise<string>;
+  /** Electron only: hand a batch of error records to the main process (pm/error_err.mdx N15). */
+  reportErrors?: (body: { app: string; events: unknown[] }) => void;
 };
 
 declare global {

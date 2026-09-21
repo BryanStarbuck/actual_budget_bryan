@@ -7,6 +7,7 @@ import { styles } from '@actual-app/components/styles';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import * as Platform from '@actual-app/core/shared/platform';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 import { css, cx } from '@emotion/css';
 import { Resizable } from 're-resizable';
 
@@ -14,6 +15,11 @@ import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import { useGlobalPref } from '#hooks/useGlobalPref';
 import { useLocalPref } from '#hooks/useLocalPref';
 import { useResizeObserver } from '#hooks/useResizeObserver';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/sidebar/SidebarShell.tsx',
+);
+const reportRenderError = reportBoundaryError(errors, 'rendering the sidebar');
 
 const MIN_SIDEBAR_WIDTH = 200;
 
@@ -56,7 +62,10 @@ export function SidebarShell({
   });
 
   return (
-    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={FeatureErrorFallback}
+    >
       <Resizable
         defaultSize={{
           width: sidebarWidth,

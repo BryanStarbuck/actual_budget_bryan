@@ -1,6 +1,12 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 // `postMessage` payloads must be structured-cloneable; errors from wasm code
 // are not always (e.g. Emscripten filesystem errors carry function properties)
 // and a failed clone masks the real error.
+
+const errors = errorFileFor(
+  'loot-core/src/platform/server/connection/shared.ts',
+);
 
 export type Message = { type: string; id?: string } & Record<string, unknown>;
 
@@ -49,9 +55,11 @@ export function safePost(post: (msg: unknown) => void, msg: Message): void {
   try {
     post(msg);
   } catch (postError) {
+    errors.expected('posting the server reply as-is', postError);
     try {
       post(JSON.parse(JSON.stringify(msg, errorReplacer)));
-    } catch {
+    } catch (jsonError) {
+      errors.caught('posting the serialized server reply', jsonError);
       try {
         post({
           type: 'error',
@@ -65,8 +73,9 @@ export function safePost(post: (msg: unknown) => void, msg: Message): void {
                 : String(postError)),
           },
         });
-      } catch {
-        // The channel itself is broken; there is no way to report anything
+      } catch (channelError) {
+        // The channel itself is broken; there is no way to reply to the client
+        errors.caught('posting the fallback error reply', channelError);
       }
     }
   }

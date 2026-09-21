@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as db from '#server/db';
 import type { CleanupTemplate } from '#types/models/cleanup-templates';
 
@@ -6,6 +8,10 @@ import {
   tombstoneOrphanCleanupGroups,
 } from './cleanup-groups';
 import { parse } from './cleanup-template.pegjs';
+
+const errors = errorFileFor(
+  'loot-core/src/server/budget/cleanup-template-notes.ts',
+);
 
 export const CLEANUP_PREFIX = '#cleanup ';
 
@@ -77,8 +83,9 @@ function parseCleanupNote(note: string): ParsedCleanupRow[] {
       // guard so a malformed parse can't write a blank-group row.
       if (row.type === 'overspend' && row.group === '') continue;
       rows.push(row);
-    } catch {
+    } catch (e) {
       // Match the legacy engine: silently skip unparseable lines.
+      errors.expected('parsing a cleanup note line', e);
     }
   }
   return rows;

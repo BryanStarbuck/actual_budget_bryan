@@ -4,9 +4,14 @@ import { Trans, useTranslation } from 'react-i18next';
 import { Paragraph } from '@actual-app/components/paragraph';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { Error as ErrorAlert } from '#components/alerts';
 import { useUrlParam } from '#hooks/useUrlParam';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/EnableBankingCallback.tsx',
+);
 
 export function EnableBankingCallback() {
   const { t } = useTranslation();
@@ -73,13 +78,18 @@ export function EnableBankingCallback() {
         setTimeout(() => {
           window.close();
         }, 1500);
-      } catch {
+      } catch (e) {
+        errors.caught('completing the Enable Banking authorization', e);
         setStatus('error');
         setErrorMessage(t('An unexpected error occurred.'));
       }
     }
 
-    void handleCallback();
+    reportRejection(
+      errors,
+      'handling the Enable Banking callback',
+      handleCallback(),
+    );
   }, [code, stateParam, stateValid, errorParam, t]);
 
   return (

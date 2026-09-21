@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import { useResponsive } from '@actual-app/components/hooks/useResponsive';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { locationService } from '#payees/location';
+
+const errors = errorFileFor(
+  'desktop-client/src/hooks/useLocationPermission.ts',
+);
 
 export type LocationPermission = {
   isGranted: boolean;
@@ -60,18 +65,20 @@ export function useLocationPermission(): LocationPermission {
 
           status.addEventListener('change', handleChange);
         })
-        .catch(() => {
+        .catch(e => {
+          // Permission API not supported, assume no access
+          errors.expected('querying the geolocation permission', e);
           if (!isMounted) {
             return;
           }
-          // Permission API not supported, assume no access
           setState(null);
         });
-    } catch {
+    } catch (e) {
+      // Synchronous error (e.g., TypeError), assume no access
+      errors.expected('querying the geolocation permission', e);
       if (!isMounted) {
         return;
       }
-      // Synchronous error (e.g., TypeError), assume no access
       setState(null);
     }
 
@@ -88,14 +95,17 @@ export function useLocationPermission(): LocationPermission {
     try {
       await locationService.getCurrentPosition();
       setState('granted');
-    } catch {
+    } catch (e) {
+      // The user declined, or the device has no location: an answer, not a fault
+      errors.expected('requesting the current position', e);
       // Re-query permissions state just in case
       try {
         const status = await navigator.permissions.query({
           name: 'geolocation',
         });
         setState(status.state);
-      } catch {
+      } catch (queryError) {
+        errors.expected('re-querying the geolocation permission', queryError);
         setState('denied');
       }
     }

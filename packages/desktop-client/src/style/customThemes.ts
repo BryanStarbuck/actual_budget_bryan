@@ -2,6 +2,10 @@
  * Custom theme utilities: fetch, validation, and storage helpers.
  */
 
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('desktop-client/src/style/customThemes.ts');
+
 export const BASE_THEME_OPTIONS = ['light', 'dark', 'midnight'] as const;
 export type BaseTheme = (typeof BASE_THEME_OPTIONS)[number];
 
@@ -685,7 +689,8 @@ export function parseInstalledTheme(
       return result;
     }
     return null;
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the installed theme preference', e);
     return null;
   }
 }
@@ -722,7 +727,8 @@ export function extractLegacyOverride(json: string | undefined): string | null {
       }
     }
     return null;
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the legacy theme override preference', e);
     return null;
   }
 }

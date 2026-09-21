@@ -12,6 +12,7 @@ import { send } from '@actual-app/core/platform/client/connection';
 import type { Budget } from '@actual-app/core/types/budget';
 import type { RemoteFile, SyncedLocalFile } from '@actual-app/core/types/file';
 import type { Handlers } from '@actual-app/core/types/handlers';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { closeAndLoadBudget } from '#budgetfiles/budgetfilesSlice';
 import { Modal, ModalCloseButton, ModalHeader } from '#components/common/Modal';
@@ -22,6 +23,10 @@ import type { Modal as ModalType } from '#modals/modalsSlice';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch, useSelector } from '#redux';
 import { getUserAccessErrors } from '#util/error';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/TransferOwnership.tsx',
+);
 
 type TransferOwnershipProps = Extract<
   ModalType,
@@ -47,36 +52,40 @@ export function TransferOwnership({
   const [isTransferring, setIsTransferring] = useState(false);
 
   useEffect(() => {
-    void send('users-get').then(
-      (data: Awaited<ReturnType<Handlers['users-get']>>) => {
-        if (!data) {
-          setAvailableUsers([]);
-        } else if ('error' in data) {
-          dispatch(
-            addNotification({
-              notification: {
-                type: 'error',
-                title: t('Error getting users'),
-                message: t(
-                  'Failed to complete ownership transfer. Please try again.',
-                ),
-                sticky: true,
-              },
-            }),
-          );
-        } else {
-          setAvailableUsers(
-            data
-              .filter(f => currentFile?.owner !== f.id)
-              .map(user => [
-                user.id,
-                user.displayName
-                  ? `${user.displayName} (${user.userName})`
-                  : user.userName,
-              ]),
-          );
-        }
-      },
+    reportRejection(
+      errors,
+      'loading the user list for an ownership transfer',
+      send('users-get').then(
+        (data: Awaited<ReturnType<Handlers['users-get']>>) => {
+          if (!data) {
+            setAvailableUsers([]);
+          } else if ('error' in data) {
+            dispatch(
+              addNotification({
+                notification: {
+                  type: 'error',
+                  title: t('Error getting users'),
+                  message: t(
+                    'Failed to complete ownership transfer. Please try again.',
+                  ),
+                  sticky: true,
+                },
+              }),
+            );
+          } else {
+            setAvailableUsers(
+              data
+                .filter(f => currentFile?.owner !== f.id)
+                .map(user => [
+                  user.id,
+                  user.displayName
+                    ? `${user.displayName} (${user.userName})`
+                    : user.userName,
+                ]),
+            );
+          }
+        },
+      ),
     );
   }, [userData?.userId, currentFile?.owner, t, dispatch]);
 
@@ -194,7 +203,8 @@ export function TransferOwnership({
                     closeAndLoadBudget({ fileId: (currentFile as Budget).id }),
                   );
                   close();
-                } catch {
+                } catch (e) {
+                  errors.caught('transferring budget ownership', e);
                   dispatch(
                     addNotification({
                       notification: {

@@ -1,7 +1,12 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { parseStringPromise } from 'xml2js';
 
 import { dayFromDate } from '#shared/months';
+
+const errors = errorFileFor(
+  'loot-core/src/server/transactions/import/ofx2json.ts',
+);
 
 type OFXTransaction = {
   amount: string;
@@ -178,7 +183,8 @@ export async function ofx2json(
   let dataParsed = null;
   try {
     dataParsed = await parseXml(content);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the OFX body as XML before the SGML fallback', e);
     const sanitized = sgml2Xml(content);
     dataParsed = await parseXml(sanitized);
   }

@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import { isRecord } from './utils';
+
+const errors = errorFileFor('cli/src/cache.ts');
 
 export const CACHE_FILE_NAME = 'state.json';
 export const CACHE_VERSION = 1;
@@ -41,13 +45,15 @@ export function readCacheState(metaDir: string): CacheState | null {
   let raw: string;
   try {
     raw = readFileSync(cachePath(metaDir), 'utf-8');
-  } catch {
+  } catch (e) {
+    errors.expected('reading the optional sync cache file', e);
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the sync cache file', e);
     return null;
   }
   return isCacheState(parsed) ? parsed : null;
@@ -64,9 +70,10 @@ export function writeCacheState(metaDir: string, state: CacheState): void {
     const tmp = `${target}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`;
     writeFileSync(tmp, JSON.stringify(state));
     renameSync(tmp, target);
-  } catch {
+  } catch (e) {
     // Cache persistence is best-effort. A read-only or unreachable dir must
     // not crash the CLI; the next invocation simply won't find a cache.
+    errors.caught('writing the sync cache file', e);
   }
 }
 

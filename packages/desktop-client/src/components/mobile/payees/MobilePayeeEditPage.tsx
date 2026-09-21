@@ -9,6 +9,7 @@ import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import type { PayeeEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { MobileBackButton } from '#components/mobile/MobileBackButton';
 import { InputField } from '#components/mobile/MobileForms';
@@ -18,6 +19,10 @@ import { usePayees } from '#hooks/usePayees';
 import { useUndo } from '#hooks/useUndo';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/payees/MobilePayeeEditPage.tsx',
+);
 
 export function MobilePayeeEditPage() {
   const { t } = useTranslation();
@@ -68,7 +73,7 @@ export function MobilePayeeEditPage() {
       });
       void navigate('/payees');
     } catch (error) {
-      console.error('Failed to update payee:', error);
+      errors.caught('renaming a payee', error, { id: payee.id });
       dispatch(
         addNotification({
           notification: {

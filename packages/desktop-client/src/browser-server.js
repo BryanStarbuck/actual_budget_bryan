@@ -84,8 +84,11 @@ self.addEventListener('message', async event => {
           { maxRetries: isDev ? 5 : 3 },
         );
 
+        // pm/error_err.mdx §7 N2: the worker's error file, installed from the bundle just loaded.
+        backend.installWorkerErrorFile(isDev);
+
         backend.initApp(isDev, self).catch(err => {
-          console.log(err);
+          backend.workerErrors.fatal('initializing the backend', err);
           appInitFailureInterval = postMessageWithRetry({
             type: 'app-init-failure',
             IDBFailure: err.message.includes('indexeddb-failure'),
@@ -102,6 +105,11 @@ self.addEventListener('message', async event => {
     }
   } catch (error) {
     console.log('Failed initializing backend:', error);
+    if (typeof backend !== 'undefined') {
+      // The worker's error file (§7 N2) — only there once the bundle loaded.
+      const workerErrors = backend.workerErrors;
+      workerErrors.fatal('starting the backend worker', error);
+    }
     appInitFailureInterval = postMessageWithRetry({
       type: 'app-init-failure',
       BackendInitFailure: true,

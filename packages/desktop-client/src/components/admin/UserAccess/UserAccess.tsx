@@ -17,6 +17,7 @@ import type {
   UserAccessEntity,
   UserAvailable,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { InfiniteScrollWrapper } from '#components/common/InfiniteScrollWrapper';
 import { Link } from '#components/common/Link';
@@ -28,6 +29,10 @@ import { useDispatch } from '#redux';
 
 import { UserAccessHeader } from './UserAccessHeader';
 import { UserAccessRow } from './UserAccessRow';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/admin/UserAccess/UserAccess.tsx',
+);
 
 type ManageUserAccessContentProps = {
   isModal: boolean;
@@ -106,7 +111,7 @@ function UserAccessContent({ isModal }: ManageUserAccessContentProps) {
       try {
         await loadAccess();
       } catch (error) {
-        console.error('Error loading user access data:', error);
+        errors.caught('loading the user access list', error);
       }
     }
 

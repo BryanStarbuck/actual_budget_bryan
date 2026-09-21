@@ -5,10 +5,15 @@ import type {
   CategoryEntity,
   ScheduleEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { useCachedSchedules } from './useCachedSchedules';
 import { useFeatureFlag } from './useFeatureFlag';
 import type { ScheduleStatusLabels } from './useSchedules';
+
+const errors = errorFileFor(
+  'desktop-client/src/hooks/useCategoryScheduleGoalTemplates.ts',
+);
 
 type ScheduleGoalDefinition = {
   type: 'schedule';
@@ -49,7 +54,9 @@ export function useCategoryScheduleGoalTemplates({
     try {
       goalDefinitions = JSON.parse(category.goal_def);
     } catch (e) {
-      console.error('Failed to parse category goal_def:', e);
+      errors.caught('parsing the category goal definitions', e, {
+        categoryId: category.id,
+      });
       return {
         schedules: [],
         statuses: new Map(),

@@ -1,9 +1,13 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as fs from '#platform/server/fs';
 import * as sqlite from '#platform/server/sqlite';
 import * as cloudStorage from '#server/cloud-storage';
 import { handlers } from '#server/main';
 import { waitOnSpreadsheet } from '#server/sheet';
+
+const errors = errorFileFor('loot-core/src/server/importers/actual.ts');
 
 export async function importActual(_filepath: string, buffer: Buffer) {
   // Importing Actual files is a special case because we can directly
@@ -19,6 +23,7 @@ export async function importActual(_filepath: string, buffer: Buffer) {
     ));
   } catch (e) {
     if (e.type === 'FileDownloadError') {
+      errors.expected('importing an Actual budget file', e);
       return { error: e.reason, meta: e.meta };
     }
     throw e;
@@ -43,7 +48,12 @@ export async function importActual(_filepath: string, buffer: Buffer) {
   await handlers['load-budget']({ id });
   await handlers['get-budget-bounds']();
   await waitOnSpreadsheet();
-  await cloudStorage.upload().catch(() => {
-    // Ignore errors
+  await cloudStorage.upload().catch(e => {
+    // Ignore errors: without a server login there is nowhere to upload to
+    if (e?.reason === 'unauthorized') {
+      errors.expected('uploading the imported budget file', e);
+    } else {
+      errors.caught('uploading the imported budget file', e);
+    }
   });
 }

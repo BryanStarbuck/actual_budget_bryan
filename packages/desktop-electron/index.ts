@@ -36,11 +36,26 @@ import type {
 import { getMenu } from './menu';
 import { retry as promiseRetry } from './retry';
 import type { AppInitFailurePayload } from './server';
+// Electron runs the tsgo-compiled CommonJS in build/, and @actual-app/error-file exports
+// TypeScript source, so this process uses a vendored, drift-checked copy (pm/error_err.mdx §4.6).
+import { errorFileFor } from './vendor/error-file/index.ts';
+import { createIngest } from './vendor/error-file/ingest.ts';
+import { installNodeErrorFile } from './vendor/error-file/node.ts';
 import {
   get as getWindowState,
   listen as listenToWindowState,
 } from './window-state';
 import './security';
+
+// pm/error_err.mdx §7 N13. Electron's main process does not die on an unhandled rejection; keep that.
+installNodeErrorFile({
+  app: 'electron-main',
+  where: 'desktop-electron/index.ts',
+  crashOnUnhandledRejection: false,
+});
+const errors = errorFileFor('desktop-electron/index.ts');
+// N15: the renderer's records arrive over IPC and go through the same caps as /error-report.
+const rendererErrors = createIngest({ via: 'electron-main' });
 
 const BUILD_ROOT = `${__dirname}/..`;
 
@@ -92,6 +107,12 @@ const logMessage = (loglevel: 'info' | 'error', message: string) => {
   // Electron main process logs
   const trimmedMessage = JSON.stringify(message.trim()); // ensure line endings are removed
   console[loglevel](trimmedMessage);
+  if (loglevel === 'error') {
+    errors.warn('logging an error in the main process', {
+      name: 'LogMessage',
+      message: message.trim(),
+    });
+  }
 
   if (!clientWin) {
     // queue up the logs until the client window is ready
@@ -164,7 +185,9 @@ async function loadGlobalPrefs() {
   let state: GlobalPrefsJson = {};
   try {
     state = JSON.parse(fs.readFileSync(getGlobalPrefsPath(), 'utf8'));
-  } catch {
+  } catch (error) {
+    // The store is optional on a first run; the defaults are the answer (R7).
+    errors.expected('loading the global prefs', error);
     logMessage('info', 'Could not load global state - using defaults');
     state = {};
   }
@@ -204,8 +227,11 @@ async function saveGlobalPrefs(state: GlobalPrefsJson) {
     await writeFile(temporaryPath, JSON.stringify(state), 'utf8');
     await rename(temporaryPath, globalPrefsPath);
   } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
+    await rm(temporaryPath, { force: true }).catch((cleanupError: unknown) => {
+      // best-effort cleanup of the temp file; the write failure below is the fault
+      errors.expected('removing the temporary global prefs file', cleanupError);
+    });
+    errors.rethrow('saving the global prefs', error);
   }
 }
 
@@ -414,6 +440,7 @@ async function startSyncServer() {
 
     return await Promise.race([syncServerPromise, syncServerTimeout]); // Either the server has started or the timeout is reached
   } catch (error) {
+    errors.caught('starting the embedded sync server', error);
     logMessage(
       'error',
       `Sync-Server: Error starting sync server: ${String(error)}`,
@@ -610,6 +637,34 @@ app.on('ready', async () => {
   await createBackgroundProcess();
 });
 
+// pm/error_err.mdx §7 N13: a renderer or utility process that dies is a fault of its own.
+app.on('render-process-gone', (_event, _webContents, details) => {
+  if (details.reason === 'clean-exit') return;
+  errors.caught(
+    'running the renderer process',
+    new Error(`render process gone: ${details.reason}`),
+    { reason: details.reason, exitCode: details.exitCode },
+  );
+});
+
+app.on('child-process-gone', (_event, details) => {
+  if (details.reason === 'clean-exit') return;
+  errors.caught(
+    'running a child process',
+    new Error(`child process gone: ${details.reason}`),
+    {
+      type: details.type,
+      name: details.name ?? null,
+      reason: details.reason,
+      exitCode: details.exitCode,
+    },
+  );
+});
+
+ipcMain.on('error-report', (_event, body: unknown) => {
+  rendererErrors.accept(body, 'electron-renderer');
+});
+
 app.on('window-all-closed', () => {
   // On macOS, closing all windows shouldn't exit the process
   if (process.platform !== 'darwin') {
@@ -689,12 +744,17 @@ ipcMain.handle('set-document-dir', async (_event, directory: string) => {
   try {
     probeDirectory = await mkdtemp(probePrefix);
   } catch (error) {
+    // A folder the user picked that refuses writes is an answer for the user, not a fault (R7).
+    errors.expected('probing the chosen budget folder for write access', error);
     throw new Error(
       `Actual is not allowed to create files in ${directory}: ${String(error)}`,
     );
   }
   await rm(probeDirectory, { recursive: true, force: true }).catch(
-    () => undefined,
+    (cleanupError: unknown) => {
+      // the probe proved what it had to; a leftover empty folder is not a fault
+      errors.expected('removing the write-access probe folder', cleanupError);
+    },
   );
 
   // Strict read: a corrupt or unreadable store must not be silently replaced
@@ -828,6 +888,8 @@ ipcMain.handle(
               `Retrying: Clean up old directory: ${currentBudgetDirectory}`,
             );
 
+            // one failed attempt is the retry loop working; the catch below owns the fault
+            errors.expected('removing the old budget directory', error);
             retry(error);
           }
         },
@@ -836,6 +898,10 @@ ipcMain.handle(
     } catch (error) {
       // Fail silently. The move worked, but the old directory wasn't cleaned up - most likely a permission issue.
       // This call needs to succeed to allow the user to continue using the app with the files in the new location.
+      errors.caught(
+        'removing the old budget directory after all retries',
+        error,
+      );
       logMessage(
         'error',
         `There was an error removing the old directory: ${String(error)}`,

@@ -5,6 +5,7 @@ import lightThemeCss from '@actual-app/components/themes/light.css?inline';
 import midnightThemeCss from '@actual-app/components/themes/midnight.css?inline';
 import paletteCss from '@actual-app/components/themes/palette.css?inline';
 import type { DarkTheme, Theme } from '@actual-app/core/types/prefs';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { useGlobalPref } from '#hooks/useGlobalPref';
 
@@ -14,6 +15,8 @@ import {
   parseInstalledTheme,
   validateThemeCss,
 } from './customThemes';
+
+const errors = errorFileFor('desktop-client/src/style/theme.tsx');
 
 const themes = {
   light: { name: 'Light', colors: lightThemeCss },
@@ -162,7 +165,10 @@ export function CustomThemeStyle() {
       try {
         return validateThemeCss(css);
       } catch (error) {
-        console.error(errorLabel, { error });
+        // User-supplied CSS that no longer validates: unusual, but not a fault
+        errors.warn('validating the custom theme CSS', error, {
+          source: errorLabel,
+        });
         return '';
       }
     };

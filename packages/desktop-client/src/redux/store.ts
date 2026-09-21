@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import {
   combineReducers,
   configureStore,
@@ -44,6 +45,8 @@ import {
   reducer as usersSliceReducer,
 } from '#users/usersSlice';
 
+const errors = errorFileFor('desktop-client/src/redux/store.ts');
+
 const rootReducer = combineReducers({
   [accountsSliceName]: accountsSliceReducer,
   [appSliceName]: appSliceReducer,
@@ -60,7 +63,8 @@ const notifyOnRejectedActionsMiddleware = createListenerMiddleware();
 notifyOnRejectedActionsMiddleware.startListening({
   matcher: isRejected,
   effect: (action, { dispatch }) => {
-    console.error(action.error);
+    // pm/error_err.mdx §7 N4
+    errors.caught(`running ${action.type}`, action.error);
     dispatch(
       addNotification({
         notification: {

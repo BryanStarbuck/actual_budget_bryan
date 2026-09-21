@@ -1,4 +1,8 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { config } from '#load-config';
+
+const errors = errorFileFor('sync-server/src/scripts/health-check.ts');
 
 const protocol =
   config.get('https.key') && config.get('https.cert') ? 'https' : 'http';
@@ -31,6 +35,7 @@ fetch(`${protocol}://${hostname}:${config.get('port')}/health`)
     }
   })
   .catch(err => {
+    errors.fatal('checking the server health', err);
     console.log('Health check failed:', err);
     process.exit(1);
   });

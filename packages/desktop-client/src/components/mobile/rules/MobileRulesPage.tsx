@@ -9,6 +9,7 @@ import * as undo from '@actual-app/core/platform/client/undo';
 import { getNormalisedString } from '@actual-app/core/shared/normalisation';
 import { q } from '@actual-app/core/shared/query';
 import type { RuleEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Search } from '#components/common/Search';
 import { ruleToString } from '#components/ManageRules';
@@ -25,6 +26,10 @@ import { useDispatch } from '#redux';
 
 import { AddRuleButton } from './AddRuleButton';
 import { RulesList } from './RulesList';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/rules/MobileRulesPage.tsx',
+);
 
 export function MobileRulesPage() {
   const { t } = useTranslation();
@@ -85,7 +90,7 @@ export function MobileRulesPage() {
       const rules = result || [];
       setAllRules(rules);
     } catch (error) {
-      console.error('Failed to load rules:', error);
+      errors.caught('loading the rules list', error);
       setAllRules([]);
     } finally {
       setIsLoading(false);
@@ -151,7 +156,7 @@ export function MobileRulesPage() {
         // Refresh the rules list
         await loadRules();
       } catch (error) {
-        console.error('Failed to delete rule:', error);
+        errors.caught('deleting a rule', error, { id: rule.id });
         dispatch(
           addNotification({
             notification: {

@@ -6,11 +6,16 @@ import type {
   CategoryGroupEntity,
   RuleConditionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 import { t } from 'i18next';
 
 import { getColorScale } from '#components/reports/chart-theme';
 import type { useSpreadsheet } from '#hooks/useSpreadsheet';
 import { aqlQuery } from '#queries/aqlQuery';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/spreadsheets/sankey-spreadsheet.ts',
+);
 
 type BudgetMonthCategory = {
   id: string;
@@ -477,7 +482,9 @@ export function filterCategoryGroups(
             ? new RegExp(value.slice(1, value.lastIndexOf('/')), 'i')
             : new RegExp(value, 'i');
         return regex.test(name);
-      } catch {
+      } catch (e) {
+        // A user-typed pattern that does not compile is an answer, not a fault (R7)
+        errors.expected('compiling a category filter regex', e);
         return false;
       }
     }

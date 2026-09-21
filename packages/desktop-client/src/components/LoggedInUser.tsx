@@ -14,6 +14,7 @@ import { View } from '@actual-app/components/view';
 import { listen } from '@actual-app/core/platform/client/connection';
 import type { RemoteFile, SyncedLocalFile } from '@actual-app/core/types/file';
 import type { TransObjectLiteral } from '@actual-app/core/types/util';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { useAuth } from '#auth/AuthProvider';
 import { Permissions } from '#auth/types';
@@ -25,6 +26,8 @@ import { getUserData, signOut } from '#users/usersSlice';
 
 import { PrivacyFilter } from './PrivacyFilter';
 import { useMultiuserEnabled, useServerURL } from './ServerContext';
+
+const errors = errorFileFor('desktop-client/src/components/LoggedInUser.tsx');
 
 type LoggedInUserProps = {
   hideIfNoServer?: boolean;
@@ -56,7 +59,7 @@ export function LoggedInUser({ hideIfNoServer, style }: LoggedInUserProps) {
     try {
       await dispatch(getUserData());
     } catch (error) {
-      console.error('Failed to initialize user data:', error);
+      errors.caught('initializing the user data', error);
     } finally {
       setLoading(false);
     }
@@ -101,7 +104,11 @@ export function LoggedInUser({ hideIfNoServer, style }: LoggedInUserProps) {
 
     switch (type) {
       case 'change-password':
-        void onChangePassword();
+        reportRejection(
+          errors,
+          'closing the budget before changing the password',
+          onChangePassword(),
+        );
         break;
       case 'sign-in':
         await onCloseBudget();

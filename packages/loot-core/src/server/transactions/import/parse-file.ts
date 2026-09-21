@@ -1,13 +1,17 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { parse as csv2json } from 'csv-parse/sync';
 
 import * as fs from '#platform/server/fs';
-import { logger } from '#platform/server/log';
 import { looselyParseAmount } from '#shared/util';
 
 import { ofx2json } from './ofx2json';
 import { qif2json } from './qif2json';
 import { xmlCAMT2json } from './xmlcamt2json';
+
+const errors = errorFileFor(
+  'loot-core/src/server/transactions/import/parse-file.ts',
+);
 
 /**
  * Parse OFX amount strings to numbers.
@@ -79,7 +83,7 @@ export async function parseFile(
   filepath: string,
   options: ParseFileOptions = {},
 ): Promise<ParseFileResult> {
-  const errors = Array<ParseError>();
+  const parseErrors = Array<ParseError>();
   const m = filepath.match(/\.[^.]*$/);
 
   if (m) {
@@ -100,18 +104,18 @@ export async function parseFile(
     }
   }
 
-  errors.push({
+  parseErrors.push({
     message: 'Invalid file type',
     internal: '',
   });
-  return { errors, transactions: [] };
+  return { errors: parseErrors, transactions: [] };
 }
 
 async function parseCSV(
   filepath: string,
   options: ParseFileOptions,
 ): Promise<ParseFileResult> {
-  const errors = Array<ParseError>();
+  const parseErrors = Array<ParseError>();
   let contents = await fs.readFile(filepath);
 
   const skipStart = Math.max(0, options.skipStartLines || 0);
@@ -121,11 +125,11 @@ async function parseCSV(
     const lines = contents.split(/\r?\n/);
 
     if (skipStart + skipEnd >= lines.length) {
-      errors.push({
+      parseErrors.push({
         message: 'Cannot skip more lines than exist in the file',
         internal: `Attempted to skip ${skipStart} start + ${skipEnd} end lines from ${lines.length} total lines`,
       });
-      return { errors, transactions: [] };
+      return { errors: parseErrors, transactions: [] };
     }
 
     const startLine = skipStart;
@@ -146,32 +150,34 @@ async function parseCSV(
       skip_empty_lines: true,
     });
   } catch (err) {
-    errors.push({
+    errors.expected('parsing the CSV import file', err);
+    parseErrors.push({
       message: 'Failed parsing: ' + err.message,
       internal: err.message,
     });
-    return { errors, transactions: [] };
+    return { errors: parseErrors, transactions: [] };
   }
 
-  return { errors, transactions: data };
+  return { errors: parseErrors, transactions: data };
 }
 
 async function parseQIF(
   filepath: string,
   options: ParseFileOptions = {},
 ): Promise<ParseFileResult> {
-  const errors = Array<ParseError>();
+  const parseErrors = Array<ParseError>();
   const contents = await fs.readFile(filepath);
 
   let data: ReturnType<typeof qif2json>;
   try {
     data = qif2json(contents);
   } catch (err) {
-    errors.push({
+    errors.expected('parsing the QIF import file', err);
+    parseErrors.push({
       message: "Failed parsing: doesn't look like a valid QIF file.",
       internal: err.stack,
     });
-    return { errors, transactions: [] };
+    return { errors: parseErrors, transactions: [] };
   }
 
   const swap = options.swapPayeeAndMemo;
@@ -203,18 +209,19 @@ async function parseOFX(
   filepath: string,
   options: ParseFileOptions,
 ): Promise<ParseFileResult> {
-  const errors = Array<ParseError>();
+  const parseErrors = Array<ParseError>();
   const contents = await fs.readFile(filepath, 'binary');
 
   let data: Awaited<ReturnType<typeof ofx2json>>;
   try {
     data = await ofx2json(contents);
   } catch (err) {
-    errors.push({
+    errors.expected('parsing the OFX import file', err);
+    parseErrors.push({
       message: 'Failed importing file',
       internal: err.stack,
     });
-    return { errors };
+    return { errors: parseErrors };
   }
 
   // Banks don't always implement the OFX standard properly
@@ -223,11 +230,11 @@ async function parseOFX(
   const swap = options.swapPayeeAndMemo;
 
   return {
-    errors,
+    errors: parseErrors,
     transactions: data.transactions.map(trans => {
       const parsedAmount = parseOfxAmount(trans.amount);
       if (parsedAmount === null) {
-        errors.push({
+        parseErrors.push({
           message: `Invalid amount format: ${trans.amount}`,
           internal: `Failed to parse amount: ${trans.amount}`,
         });
@@ -253,7 +260,7 @@ async function parseCAMT(
   filepath: string,
   options: ParseFileOptions = {},
 ): Promise<ParseFileResult> {
-  const errors = Array<ParseError>();
+  const parseErrors = Array<ParseError>();
   // Read the raw bytes so xmlCAMT2json can honor the encoding declared in
   // the XML header instead of decoding the file as UTF-8.
   const contents = await fs.readFile(filepath, 'binary');
@@ -262,18 +269,18 @@ async function parseCAMT(
   try {
     data = await xmlCAMT2json(contents);
   } catch (err) {
-    logger.error(err);
-    errors.push({
+    errors.warn('parsing the CAMT import file', err);
+    parseErrors.push({
       message: 'Failed importing file',
       internal: err.stack,
     });
-    return { errors };
+    return { errors: parseErrors };
   }
 
   const swap = options.swapPayeeAndMemo;
 
   return {
-    errors,
+    errors: parseErrors,
     transactions: data.map(trans => {
       const payeeSource = swap ? trans.notes : trans.payee_name;
       const memoSource = swap ? trans.payee_name : trans.notes;

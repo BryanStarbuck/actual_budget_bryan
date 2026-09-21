@@ -1,9 +1,13 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import {
   enableOpenID,
   getActiveLoginMethod,
   needsBootstrap,
 } from '#account-db';
 import { config } from '#load-config';
+
+const errors = errorFileFor('sync-server/src/scripts/enable-openid.js');
 
 if (needsBootstrap()) {
   console.log(
@@ -44,6 +48,7 @@ if (needsBootstrap()) {
       'Note: The first user to login with OpenID will be the owner of the server.',
     );
   } catch (err) {
+    errors.fatal('enabling OpenID', err);
     console.log('Unexpected error:', err);
     console.log(
       'Please report this as an issue: https://github.com/actualbudget/actual-server/issues',

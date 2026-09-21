@@ -25,6 +25,9 @@ import { INSTRUCTIONS } from './instructions.js';
 import type { Logger } from './logger.js';
 import { findTool, TOOLS } from './tools/registry.js';
 import type { ToolDef } from './tools/tool.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('mcp/src/server.ts');
 
 export const SERVER_NAME = 'actual_budget';
 export const SERVER_VERSION = '0.1.0';
@@ -224,6 +227,13 @@ export class McpServerHost {
       // carry paths we would rather not disclose (§7.4).
       if (!(err instanceof ToolError)) {
         logger.error(`${name}: ${(err as Error).stack ?? String(err)}`);
+        // pm/error_err.mdx §7 N19: the same fault lands in error.err, next to mcp.err.
+        errors.caught('running an MCP tool', err, { tool: name });
+      } else if (toolError.code === 'internal') {
+        errors.caught('running an MCP tool', err, { tool: name });
+      } else {
+        // A gate refusal or a routed server answer is an answer, not a fault (R7).
+        errors.expected('running an MCP tool', err);
       }
 
       logger.audit(

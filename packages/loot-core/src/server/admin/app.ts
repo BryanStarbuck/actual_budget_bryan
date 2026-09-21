@@ -1,6 +1,9 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as asyncStorage from '#platform/server/asyncStorage';
 import { createApp } from '#server/app';
+import { PostError } from '#server/errors';
 import { del, get, patch, post } from '#server/post';
 import { getServer } from '#server/server-config';
 import type {
@@ -8,6 +11,22 @@ import type {
   UserAvailable,
   UserEntity,
 } from '#types/models';
+
+const errors = errorFileFor('loot-core/src/server/admin/app.ts');
+
+// A PostError carrying one of these reasons means the server could not be reached or did not
+// answer sensibly: a fault. Any other reason (unauthorized, a refused user or access change) is the
+// server's answer to the request, not a fault (R7).
+const POST_FAULT_REASONS = new Set([
+  'network-failure',
+  'parse-json',
+  'internal',
+  'unknown',
+]);
+
+function isServerAnswer(err: unknown): boolean {
+  return err instanceof PostError && !POST_FAULT_REASONS.has(err.reason);
+}
 
 export type AdminHandlers = {
   'users-get': typeof getUsers;
@@ -49,6 +68,7 @@ async function getUsers() {
         const list = JSON.parse(res) as UserEntity[];
         return list;
       } catch (err) {
+        errors.caught('parsing the admin users response', err);
         return { error: 'Failed to parse response: ' + err.message };
       }
     }
@@ -79,6 +99,11 @@ async function deleteAllUsers(
         return res;
       }
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('deleting users on the server', err);
+      } else {
+        errors.caught('deleting users on the server', err);
+      }
       return { error: err.reason };
     }
   }
@@ -99,6 +124,11 @@ async function addUser(
 
       return res as UserEntity;
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('adding a user on the server', err);
+      } else {
+        errors.caught('adding a user on the server', err);
+      }
       return { error: err.reason };
     }
   }
@@ -119,6 +149,11 @@ async function updateUser(
 
       return res as UserEntity;
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('updating a user on the server', err);
+      } else {
+        errors.caught('updating a user on the server', err);
+      }
       return { error: err.reason };
     }
   }
@@ -139,6 +174,11 @@ async function addAccess(
 
       return {};
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('adding file access on the server', err);
+      } else {
+        errors.caught('adding file access on the server', err);
+      }
       return { error: err.reason };
     }
   }
@@ -170,6 +210,11 @@ async function deleteAllAccess({
         return res;
       }
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('deleting file access on the server', err);
+      } else {
+        errors.caught('deleting file access on the server', err);
+      }
       return { error: err.reason };
     }
   }
@@ -196,6 +241,7 @@ async function accessGetAvailableUsers(
       try {
         return JSON.parse(res) as UserAvailable[];
       } catch (err) {
+        errors.caught('parsing the available users response', err);
         return { error: 'Failed to parse response: ' + err.message };
       }
     }
@@ -223,6 +269,11 @@ async function transferOwnership({
         },
       );
     } catch (err) {
+      if (isServerAnswer(err)) {
+        errors.expected('transferring file ownership on the server', err);
+      } else {
+        errors.caught('transferring file ownership on the server', err);
+      }
       return { error: err.reason };
     }
   }

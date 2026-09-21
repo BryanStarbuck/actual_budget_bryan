@@ -8,6 +8,7 @@ import { useResponsive } from '@actual-app/components/hooks/useResponsive';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import * as undo from '@actual-app/core/platform/client/undo';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { getLatestAppVersion, sync } from '#app/appSlice';
 import { ProtectedRoute } from '#auth/ProtectedRoute';
@@ -45,6 +46,9 @@ import { Titlebar } from './Titlebar';
 import { Tour } from './tour/Tour';
 import { TourAutoOffer } from './tour/TourAutoOffer';
 import { TourProvider } from './tour/TourProvider';
+
+const errors = errorFileFor('desktop-client/src/components/FinancesApp.tsx');
+const reportRenderError = reportBoundaryError(errors, 'rendering a page');
 
 function NarrowNotSupported({
   redirectTo = '/budget',
@@ -263,6 +267,7 @@ export function FinancesApp() {
                       path="/budget"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -275,6 +280,7 @@ export function FinancesApp() {
                       path="/schedules"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -286,6 +292,7 @@ export function FinancesApp() {
                       path="/schedules/:id"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -300,6 +307,7 @@ export function FinancesApp() {
                       path="/payees"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -311,6 +319,7 @@ export function FinancesApp() {
                       path="/payees/:id"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -324,6 +333,7 @@ export function FinancesApp() {
                       path="/rules"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -335,6 +345,7 @@ export function FinancesApp() {
                       path="/rules/:id"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -346,6 +357,7 @@ export function FinancesApp() {
                       path="/bank-sync"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -357,6 +369,7 @@ export function FinancesApp() {
                       path="/bank-sync/account/:accountId/edit"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -391,6 +404,7 @@ export function FinancesApp() {
                       path="/accounts"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -403,6 +417,7 @@ export function FinancesApp() {
                       path="/accounts/:id"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -415,6 +430,7 @@ export function FinancesApp() {
                       path="/transactions/:transactionId"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >
@@ -429,6 +445,7 @@ export function FinancesApp() {
                       path="/categories/:id"
                       element={
                         <ErrorBoundary
+                          onError={reportRenderError}
                           FallbackComponent={FeatureErrorFallback}
                           resetKeys={[location.pathname]}
                         >

@@ -10,6 +10,7 @@ import {
   migrationsDir,
   sqlWasmPath,
 } from '@actual-app/core/default-filesystem';
+import { errorReportVitePlugin } from '@actual-app/error-file/vite-plugin';
 import babel from '@rolldown/plugin-babel';
 import inject from '@rollup/plugin-inject';
 import basicSsl from '@vitejs/plugin-basic-ssl';
@@ -335,6 +336,8 @@ export default defineConfig(async ({ mode, command }) => {
       tsconfigPaths: true,
     },
     plugins: [
+      // pm/error_err.mdx §7 N20: POST /error-report on the dev server (:3001).
+      errorReportVitePlugin(),
       // electron (desktop) builds do not support PWA
       mode === 'desktop'
         ? undefined

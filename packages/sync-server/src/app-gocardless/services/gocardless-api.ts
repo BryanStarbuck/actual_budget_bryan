@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import type {
   GoCardlessAccountDetails,
   GoCardlessAccountId,
@@ -12,6 +14,10 @@ import type {
   GetBalances,
   GetTransactionsResponse,
 } from '#app-gocardless/gocardless.types';
+
+const errors = errorFileFor(
+  'sync-server/src/app-gocardless/services/gocardless-api.ts',
+);
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com/api/v2';
 const ALLOWED_ORIGIN = new URL(BASE_URL).origin;
@@ -133,7 +139,10 @@ export class GoCardlessApi {
       );
       try {
         error.response.data = await response.json();
-      } catch {}
+      } catch (e) {
+        // An error body that is not JSON is normal; the status is the diagnosis.
+        errors.expected('parsing the GoCardless error body', e);
+      }
       console.log(
         `GoCardless ${method} ${endpoint} ${response.status}`,
         error.response.data ? JSON.stringify(error.response.data) : '(no body)',

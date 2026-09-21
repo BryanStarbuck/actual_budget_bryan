@@ -10,6 +10,7 @@ import {
   SyncResponseSchema,
   toBinary,
 } from '@actual-app/crdt';
+import { errorFileFor } from '@actual-app/error-file';
 import type { Request, Response } from 'express';
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -41,9 +42,10 @@ import {
 } from './util/paths';
 import type { GroupId } from './util/paths';
 
+const errors = errorFileFor('sync-server/src/app-sync.ts');
+
 const app = express();
 app.use(validateSessionMiddleware);
-app.use(errorMiddleware);
 app.use(requestLoggerMiddleware);
 app.use(
   express.raw({
@@ -140,7 +142,8 @@ app.post('/sync', async (req, res): Promise<void> => {
   try {
     requestPb = fromBinary(SyncRequestSchema, req.body);
   } catch (e) {
-    console.log('Error parsing sync request', e);
+    // A body that is not a SyncRequest is a bad request from the client, not our fault (R7).
+    errors.expected('parsing a sync request', e);
     res.status(500);
     res.send({ status: 'error', reason: 'internal-error' });
     return;
@@ -287,8 +290,8 @@ app.post('/reset-user-file', async (req, res) => {
   if (groupId) {
     try {
       await fs.unlink(getPathForGroupFile(groupId));
-    } catch {
-      console.log(`Unable to delete sync data for group "${groupId}"`);
+    } catch (err) {
+      errors.caught('deleting the sync data for a group', err, { groupId });
     }
   }
 
@@ -362,7 +365,7 @@ app.post('/upload-user-file', async (req, res) => {
   try {
     await fs.writeFile(getPathForUserFile(fileId), req.body);
   } catch (err) {
-    console.log('Error writing file', err);
+    errors.caught('writing an uploaded user file', err, { fileId });
     res.status(500).send({ status: 'error' });
     return;
   }
@@ -570,3 +573,6 @@ app.post('/delete-user-file', (req, res) => {
 
   res.send(OK_RESPONSE);
 });
+
+// Registered AFTER the routes so it can actually fire (pm/error_err.mdx §7 N10).
+app.use(errorMiddleware);

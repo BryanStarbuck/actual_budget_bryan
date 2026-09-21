@@ -9,10 +9,15 @@ import type {
   ScheduleEntity,
   TransactionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { useCachedSchedules } from './useCachedSchedules';
 import { useSyncedPref } from './useSyncedPref';
 import { calculateRunningBalancesBottomUp } from './useTransactions';
+
+const errors = errorFileFor(
+  'desktop-client/src/hooks/usePreviewTransactions.ts',
+);
 
 type UsePreviewTransactionsProps = {
   filter?: (schedule: ScheduleEntity) => boolean;
@@ -135,6 +140,13 @@ export function usePreviewTransactions({
         }
       })
       .catch(error => {
+        errors.caught(
+          'running rules over the scheduled preview transactions',
+          error,
+          {
+            count: scheduleTransactions.length,
+          },
+        );
         if (!isUnmounted) {
           setError(error);
           setIsLoading(false);

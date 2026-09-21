@@ -19,6 +19,20 @@ import {
 } from './credentials.js';
 import { Logger } from './logger.js';
 import { McpServerHost, SERVER_NAME, SERVER_VERSION } from './server.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
+import { installNodeErrorFile } from './vendor/error-file/node.ts';
+
+// pm/error_err.mdx §7 N19: the process-level net, before anything else runs. stdout is the
+// JSON-RPC wire (§8.1), so the echo is OFF regardless of NODE_ENV — the file is the only output.
+// An unhandled rejection has never taken this server down mid-conversation, and still does not:
+// the library writes it and keeps the process alive.
+installNodeErrorFile({
+  app: 'mcp',
+  where: 'mcp/src/index.ts',
+  echo: false,
+  crashOnUnhandledRejection: false,
+});
+const errors = errorFileFor('mcp/src/index.ts');
 
 function refuse(message: string, fix: string): never {
   // stderr, always. stdout is the wire (§8.1), and a refusal printed there
@@ -45,6 +59,8 @@ export class Main {
       config = loadConfig();
     } catch (err) {
       if (err instanceof ConfigError) {
+        // a misconfiguration is an answer with a fix, not a fault (R7)
+        errors.expected('loading the MCP config', err);
         refuse(err.message, err.fix);
       }
       throw err;
@@ -72,6 +88,8 @@ export class Main {
       key = resolved.key;
     } catch (err) {
       if (err instanceof CredentialsError) {
+        // an unreadable or over-permissive credentials file is a refusal with a fix (R7)
+        errors.expected('resolving the machine key', err);
         refuse(err.message, err.fix);
       }
       throw err;
@@ -115,7 +133,9 @@ export class Main {
     });
 
     // An unhandled rejection must not take the server down mid-conversation
-    // and must never reach stdout.
+    // and must never reach stdout. The library's handler (installed above with
+    // crashOnUnhandledRejection: false) writes the record; this keeps the one
+    // line in mcp.err that operators grep for.
     process.on('unhandledRejection', reason => {
       logger.error(`unhandledRejection: ${String(reason)}`);
     });

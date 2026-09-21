@@ -6,6 +6,7 @@ import type {
   ScheduleEntity,
 } from '@actual-app/core/types/models';
 import type { CleanupTemplate } from '@actual-app/core/types/models/cleanup-templates';
+import { errorFileFor } from '@actual-app/error-file';
 import { debounce } from 'es-toolkit/compat';
 
 import {
@@ -30,6 +31,10 @@ import { pushModal } from '#modals/modalsSlice';
 import { useDispatch } from '#redux';
 
 import { NON_CONTRIBUTION_TYPES } from './TypePicker';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/BudgetAutomationsModal/useBudgetAutomationsEditor.ts',
+);
 
 export type ActiveSelection =
   | { kind: 'entry'; idx: number }
@@ -234,7 +239,8 @@ export function useBudgetAutomationsEditor({
           templates,
         });
         if (!cancelled) setDryRun(result);
-      } catch {
+      } catch (e) {
+        errors.caught('dry-running the budget automations', e, { categoryId });
         if (!cancelled) setDryRun(null);
       }
     }, 200);

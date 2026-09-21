@@ -6,6 +6,7 @@ import {
   serializeClock,
   Timestamp,
 } from '@actual-app/crdt';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { captureException } from '#platform/exceptions';
 import * as asyncStorage from '#platform/server/asyncStorage';
@@ -43,6 +44,8 @@ import { isError, notifyDeferredMessages, quoteSqlId } from './utils';
 
 export { makeTestMessage } from './make-test-message';
 export { resetSync } from './reset';
+
+const errors = errorFileFor('loot-core/src/server/sync/index.ts');
 export { repairSync } from './repair';
 
 const FULL_SYNC_DELAY = 1000;
@@ -161,6 +164,8 @@ function apply(
       db.runQuery(db.cache(query.sql), query.params);
     } catch (error) {
       if (deferUnknownSchema && isMissingSchemaError(error)) {
+        // The table or column comes from a newer version of the app
+        errors.expected('applying a sync message', error);
         deferMessage(msg);
         return false;
       }
@@ -210,6 +215,7 @@ function fetchAll(table: string, ids: string[]) {
       if (isMissingSchemaError(error)) {
         // The table comes from a newer version of the app; its messages
         // will be deferred by `apply`
+        errors.expected('fetching the rows touched by a sync', error);
         break;
       }
       throw new SyncError('invalid-schema', {
@@ -378,7 +384,9 @@ function applyMessagesForImport(messages: Message[]): void {
       if (!msg.old) {
         try {
           apply(msg);
-        } catch {
+        } catch (e) {
+          // Retry, deferring the message if its schema is unknown
+          errors.expected('applying an imported sync message', e);
           apply(msg, true);
         }
 
@@ -640,6 +648,7 @@ export function receiveMessages(messages: Message[]): Promise<Message[]> {
     }
   } catch (e) {
     if (e instanceof Timestamp.ClockDriftError) {
+      errors.caught('receiving the sync clock', e);
       throw new SyncError('clock-drift');
     }
     throw e;
@@ -795,7 +804,15 @@ export const fullSync = once(async function (): Promise<
   try {
     messages = await _fullSync(null, 0, null);
   } catch (e) {
-    logger.log(e);
+    if (
+      e instanceof PostError &&
+      (e.reason === 'unauthorized' || e.reason === 'network-failure')
+    ) {
+      // Logged out or offline: an answer, not a fault (R7)
+      errors.expected('running a full sync', e);
+    } else {
+      errors.caught('running a full sync', e, { reason: e.reason });
+    }
 
     if (e instanceof SyncError) {
       if (e.reason === 'out-of-sync') {
@@ -831,7 +848,6 @@ export const fullSync = once(async function (): Promise<
         app.events.emit('sync', { type: 'error', meta: e.meta });
       }
     } else if (e instanceof PostError) {
-      logger.log(e);
       if (e.reason === 'unauthorized') {
         app.events.emit('sync', { type: 'unauthorized' });
 

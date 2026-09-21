@@ -1,6 +1,10 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { bootstrap, needsBootstrap } from '#account-db';
 import { changePassword } from '#accounts/password';
 import { promptPassword } from '#util/prompt';
+
+const errors = errorFileFor('sync-server/src/scripts/reset-password.js');
 
 if (needsBootstrap()) {
   console.log(
@@ -19,6 +23,7 @@ if (needsBootstrap()) {
     }
     console.log('Password set!');
   } catch (err) {
+    errors.fatal('setting the server password', err);
     console.log('Unexpected error:', err);
     console.log(
       'Please report this as an issue: https://github.com/actualbudget/actual-server/issues',
@@ -42,6 +47,7 @@ if (needsBootstrap()) {
       'Note: you will need to log in with the new password on any browsers or devices that are currently logged in.',
     );
   } catch (err) {
+    errors.fatal('changing the server password', err);
     console.log('Unexpected error:', err);
     console.log(
       'Please report this as an issue: https://github.com/actualbudget/actual-server/issues',

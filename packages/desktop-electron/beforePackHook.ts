@@ -3,6 +3,10 @@ import copyFiles from 'copyfiles';
 import { Arch } from 'electron-builder';
 import type { AfterPackContext } from 'electron-builder';
 
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('desktop-electron/beforePackHook.ts');
+
 /* The beforePackHook runs before packing the Electron app for an architecture
 We hook in here to build anything architecture dependent - such as beter-sqlite3
 To build, we call @electron/rebuild on the better-sqlite3 module */
@@ -50,6 +54,7 @@ const beforePackHook = async (context: AfterPackContext) => {
       console.info(`Copied appx files!`);
     }
   } catch (err) {
+    errors.fatal('rebuilding the native modules before packing', err, { arch });
     console.error('beforePackHook:', err);
     process.exit(1); // End the process - unsuccessful build
   }

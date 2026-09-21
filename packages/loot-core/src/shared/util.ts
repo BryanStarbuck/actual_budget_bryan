@@ -1,8 +1,11 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { formatDistanceToNow } from 'date-fns';
 import type { Locale } from 'date-fns';
 
 import { getDecimalPlaces } from './currencies';
+
+const errors = errorFileFor('loot-core/src/shared/util.ts');
 
 export function last<T>(arr: Array<T>) {
   return arr[arr.length - 1];
@@ -645,7 +648,8 @@ export function applyFindReplace(
   try {
     const pattern = useRegex ? new RegExp(find, 'g') : find;
     return text.replaceAll(pattern, replace);
-  } catch {
+  } catch (e) {
+    errors.expected('applying a find-and-replace pattern', e);
     return text;
   }
 }

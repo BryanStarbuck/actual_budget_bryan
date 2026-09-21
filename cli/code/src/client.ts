@@ -8,6 +8,9 @@
 import { fingerprint } from './credentials.js';
 import { CliError, Exit } from './exit.js';
 import type { Logger } from './logger.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('cli/code/src/client.ts');
 
 export const DEFAULT_API_URL = 'http://127.0.0.1:5006';
 
@@ -40,7 +43,9 @@ export function resolveTarget(
   let url: URL;
   try {
     url = new URL(raw);
-  } catch {
+  } catch (e) {
+    // Bad user input is an answer, not a fault (R7).
+    errors.expected('parsing the --api URL', e);
     throw new CliError(Exit.usage, `--api ${raw} is not a URL.`);
   }
 
@@ -117,10 +122,14 @@ export async function call(
   } catch (err) {
     audit(opts, target, route, method, startedAt, 'error');
     if ((err as Error).name === 'AbortError') {
+      errors.expected(`calling ${method} ${route}`, err);
       throw new CliError(Exit.unreachable, `${method} ${route} timed out.`, {
         hint: 'raise --timeout, or drop it on the long verbs',
       });
     }
+    // The app being down is what `abx up` exists for; the CliError below is
+    // the answer. Still recorded as WARN so an unreachable install is visible.
+    errors.warn(`calling ${method} ${route}`, err);
     throw new CliError(
       Exit.unreachable,
       `Could not reach the machine plane at ${target.baseUrl}.`,
@@ -141,9 +150,11 @@ export async function call(
   // browser origin, or simply not mounted because the server booted without a
   // key (R9). A route-level not_found says so in its body; a gate-level one
   // does not, and the difference matters to the operator.
-  const envelope = (await response.json().catch(() => undefined)) as
-    | Envelope
-    | undefined;
+  const envelope = (await response.json().catch((e: unknown) => {
+    // A non-JSON body is diagnosed for the operator just below.
+    errors.expected('parsing the machine-plane response body', e);
+    return undefined;
+  })) as Envelope | undefined;
 
   if (envelope === undefined) {
     throw new CliError(

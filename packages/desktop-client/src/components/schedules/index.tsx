@@ -8,6 +8,7 @@ import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import { q } from '@actual-app/core/shared/query';
 import type { ScheduleEntity } from '@actual-app/core/types/models';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { Search } from '#components/common/Search';
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
@@ -18,6 +19,14 @@ import { useDispatch } from '#redux';
 
 import { SchedulesTable } from './SchedulesTable';
 import type { ScheduleItemAction } from './SchedulesTable';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/schedules/index.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering the schedules page',
+);
 
 export function Schedules() {
   const { t } = useTranslation();
@@ -87,7 +96,10 @@ export function Schedules() {
   } = useSchedules({ query: schedulesQuery });
 
   return (
-    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={FeatureErrorFallback}
+    >
       <Page header={t('Schedules')}>
         <View
           style={{

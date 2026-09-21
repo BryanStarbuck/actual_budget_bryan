@@ -5,11 +5,16 @@ import type {
   RuleConditionEntity,
   SummaryContent,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 import * as d from 'date-fns';
 import type { Locale } from 'date-fns';
 
 import type { useSpreadsheet } from '#hooks/useSpreadsheet';
 import { aqlQuery } from '#queries/aqlQuery';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/spreadsheets/summary-spreadsheet.ts',
+);
 
 export function summarySpreadsheet(
   start: string,
@@ -36,7 +41,7 @@ export function summarySpreadsheet(
       });
       filters = response.filters;
     } catch (error) {
-      console.error('Error fetching filters:', error);
+      errors.caught('building the summary transaction filters', error);
     }
     const conditionsOpKey = conditionsOp === 'or' ? '$or' : '$and';
 
@@ -58,7 +63,7 @@ export function summarySpreadsheet(
         new Date(),
       );
     } catch (error) {
-      console.error('Error parsing dates:', error);
+      errors.caught('parsing the summary date range', error);
       throw new Error('Invalid date format provided');
     }
 
@@ -121,7 +126,7 @@ export function summarySpreadsheet(
     try {
       data = await aqlQuery(query);
     } catch (error) {
-      console.error('Error executing query:', error);
+      errors.caught('querying the summary totals', error);
       return;
     }
 
@@ -280,7 +285,7 @@ async function calculatePercentage(
     });
     filters = response.filters;
   } catch (error) {
-    console.error('Error creating filters:', error);
+    errors.caught('building the summary divisor filters', error);
     return {
       total: 0,
       dividend: 0,
@@ -318,7 +323,7 @@ async function calculatePercentage(
   try {
     divisorData = (await aqlQuery(query)) as { data: { amount: number }[] };
   } catch (error) {
-    console.error('Error executing divisor query:', error);
+    errors.caught('querying the summary divisor total', error);
     return {
       total: 0,
       dividend: 0,

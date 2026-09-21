@@ -1,5 +1,8 @@
 // @ts-strict-ignore
 import * as Platform from '@actual-app/core/shared/platform';
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('desktop-client/src/util/versions.ts');
 
 function parseSemanticVersion(versionString): [number, number, number] {
   return versionString
@@ -29,8 +32,9 @@ export async function getLatestVersion(): Promise<string | 'unknown'> {
     );
     const json = await response.json();
     return json?.tag_name ?? 'unknown';
-  } catch {
-    // Rate limit exceeded? Or perhaps GitHub is down?
+  } catch (e) {
+    // Rate limit exceeded? Or perhaps GitHub is down? Offline is the usual case.
+    errors.expected('checking GitHub for the latest release', e);
     return 'unknown';
   }
 }

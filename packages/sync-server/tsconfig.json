@@ -22,6 +22,9 @@
       "path": "../crdt"
     },
     {
+      "path": "../error-file"
+    },
+    {
       "path": "../desktop-client"
     }
   ],

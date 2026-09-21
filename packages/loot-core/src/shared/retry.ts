@@ -1,3 +1,7 @@
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('loot-core/src/shared/retry.ts');
+
 type RetryCallback = (error?: unknown) => void;
 
 type RetryOptions = {
@@ -42,11 +46,17 @@ export function retry<T>(
       Promise.resolve()
         .then(() => fn(onRetry, attempt))
         .then(resolve, error => {
+          // Rejections are forwarded to the caller's promise, which reports them.
           if (!(error instanceof RetrySignal)) {
+            errors.expected(
+              'forwarding a rejection from a retried call',
+              error,
+            );
             reject(error);
             return;
           }
           if (attempt > retries) {
+            errors.expected('giving up after the last retry', error.error);
             reject(error.error);
             return;
           }

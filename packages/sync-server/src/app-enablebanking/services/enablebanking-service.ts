@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import createDebug from 'debug';
 
 import {
@@ -8,6 +9,9 @@ import { getJWT } from '#app-enablebanking/utils/jwt';
 import { SecretName, secretsService } from '#services/secrets-service';
 
 const debug = createDebug('actual:enable-banking:service');
+const errors = errorFileFor(
+  'sync-server/src/app-enablebanking/services/enablebanking-service.ts',
+);
 
 const BASE_URL = 'https://api.enablebanking.com';
 
@@ -174,8 +178,15 @@ async function request<T>(
     let responseBody: unknown;
     try {
       responseBody = await response.json();
-    } catch {
-      responseBody = await response.text().catch(() => 'unknown');
+    } catch (e) {
+      errors.expected('parsing the Enable Banking error body as JSON', e);
+      responseBody = await response.text().catch(textError => {
+        errors.expected(
+          'reading the Enable Banking error body as text',
+          textError,
+        );
+        return 'unknown';
+      });
     }
     throw handleEnableBankingError(response.status, responseBody);
   }

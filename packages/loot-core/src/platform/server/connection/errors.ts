@@ -1,3 +1,9 @@
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor(
+  'loot-core/src/platform/server/connection/errors.ts',
+);
+
 export type TransferableError = {
   type: string;
   message?: string;
@@ -91,7 +97,8 @@ export function postErrorReply(
 
   try {
     post(buildMessage(error));
-  } catch {
+  } catch (cloneError) {
+    errors.expected('posting the error reply as-is', cloneError);
     post(buildMessage(toCloneableError(error)));
   }
 

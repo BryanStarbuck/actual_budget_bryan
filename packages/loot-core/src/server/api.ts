@@ -1,5 +1,6 @@
 // @ts-strict-ignore
 import { getClock } from '@actual-app/crdt';
+import { errorFileFor } from '@actual-app/error-file';
 
 import * as connection from '#platform/server/connection';
 import { logger } from '#platform/server/log';
@@ -49,6 +50,8 @@ import { runMutator } from './mutators';
 import * as prefs from './prefs';
 import * as sheet from './sheet';
 import { batchMessages, setSyncingMode } from './sync';
+
+const errors = errorFileFor('loot-core/src/server/api.ts');
 
 let IMPORT_MODE = false;
 
@@ -356,7 +359,7 @@ handlers['api/finish-import'] = async function () {
   await sheet.waitOnSpreadsheet();
 
   await cloudStorage.upload().catch(err => {
-    logger.warn('cloudStorage.upload failed during finish-import', err);
+    errors.caught('uploading the budget after finishing an import', err);
   });
 
   connection.send('finish-import');

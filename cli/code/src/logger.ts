@@ -16,6 +16,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('cli/code/src/logger.ts');
+
 const ROTATE_BYTES = 8 * 1024 * 1024;
 const GENERATIONS = 5;
 
@@ -41,8 +45,9 @@ function rotateIfNeeded(file: string): void {
       }
     }
     fs.renameSync(file, `${file}.1`);
-  } catch {
-    // Swallowed on purpose — see the module comment.
+  } catch (e) {
+    // Swallowed on purpose — see the module comment. Reported, not rethrown.
+    errors.caught('rotating the CLI log file', e);
   }
 }
 
@@ -59,8 +64,9 @@ export class Logger {
       const file = path.join(this.#dir, name);
       rotateIfNeeded(file);
       fs.appendFileSync(file, `${line}\n`, { mode: 0o600 });
-    } catch {
-      // Swallowed on purpose — see the module comment.
+    } catch (e) {
+      // Swallowed on purpose — see the module comment. Reported, not rethrown.
+      errors.caught('appending to the CLI log file', e, { file: name });
     }
   }
 

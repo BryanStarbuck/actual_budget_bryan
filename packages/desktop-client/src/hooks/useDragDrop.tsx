@@ -20,6 +20,9 @@ import type {
 
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('desktop-client/src/hooks/useDragDrop.tsx');
 
 // ===========================================================================
 // Migration Notes
@@ -362,8 +365,9 @@ export function useDrop<T extends { id: string }>({
       let parsed: T;
       try {
         parsed = JSON.parse(data) as T;
-      } catch {
+      } catch (e) {
         // Ignore malformed payloads
+        errors.expected('parsing a dropped drag payload', e);
         return;
       }
 

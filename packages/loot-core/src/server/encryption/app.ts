@@ -1,7 +1,7 @@
+import { errorFileFor } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
 import * as asyncStorage from '#platform/server/asyncStorage';
-import { logger } from '#platform/server/log';
 import { createApp } from '#server/app';
 import { post } from '#server/post';
 import * as prefs from '#server/prefs';
@@ -10,6 +10,8 @@ import { makeTestMessage, resetSync } from '#server/sync';
 import type { Budget } from '#types/budget';
 
 import * as encryption from '.';
+
+const errors = errorFileFor('loot-core/src/server/encryption/app.ts');
 
 export type EncryptionHandlers = {
   'key-make': typeof keyMake;
@@ -84,7 +86,7 @@ async function keyTest({
     });
     validCloudFileId = cloudFileId!;
   } catch (e) {
-    logger.log(e);
+    errors.caught('fetching the encryption key from the sync server', e);
     return { error: { reason: 'network' } };
   }
 
@@ -110,7 +112,9 @@ async function keyTest({
   try {
     await encryption.decrypt(Buffer.from(test.value, 'base64'), test.meta);
   } catch (e) {
-    logger.log(e);
+    // A wrong password fails the decrypt test; that is the user's
+    // answer, not a fault (R7).
+    errors.expected('testing the encryption key', e);
 
     // Unload the key, it's invalid
     encryption.unloadKey(key);

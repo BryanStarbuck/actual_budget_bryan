@@ -3,6 +3,10 @@
 // (tiny) helper is duplicated here to avoid pulling in the `promise-retry`
 // dependency.
 
+import { errorFileFor } from './vendor/error-file/index.ts';
+
+const errors = errorFileFor('desktop-electron/retry.ts');
+
 type RetryCallback = (error?: unknown) => void;
 
 type RetryOptions = {
@@ -38,9 +42,12 @@ export function retry<T>(
         .then(() => fn(onRetry, attempt))
         .then(resolve, error => {
           if (!(error instanceof RetrySignal)) {
+            // Handed to the caller, which reports it
             reject(error);
             return;
           }
+          // The callback asked for another attempt: an answer, not a fault
+          errors.expected('retrying after a failed attempt', error.error);
           if (attempt > retries) {
             reject(error.error);
             return;

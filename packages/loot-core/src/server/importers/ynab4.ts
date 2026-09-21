@@ -1,7 +1,7 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
-import { logger } from '#platform/server/log';
 import { send } from '#server/main-app';
 import { safeUnzip } from '#server/util/zip';
 import * as monthUtils from '#shared/months';
@@ -10,6 +10,8 @@ import { amountToInteger, groupBy, sortByKey } from '#shared/util';
 import { runImportSteps } from './progress';
 import type { ImportTick } from './progress';
 import type * as YNAB4 from './ynab4-types';
+
+const errors = errorFileFor('loot-core/src/server/importers/ynab4.ts');
 
 // Importer
 
@@ -371,7 +373,8 @@ function findLatestDevice(
       let data;
       try {
         data = JSON.parse(contents);
-      } catch {
+      } catch (e) {
+        errors.expected('parsing a YNAB4 device file', e);
         return null;
       }
 
@@ -472,7 +475,7 @@ export function parseFile(buffer: Buffer): YNAB4.YFull {
   try {
     zipped = safeUnzip(buffer);
   } catch (e) {
-    logger.log(e);
+    errors.expected('unzipping the YNAB4 export', e);
     throw new Error('Error reading zip file');
   }
   const entries = Object.keys(zipped);
@@ -499,13 +502,14 @@ export function parseFile(buffer: Buffer): YNAB4.YFull {
       'utf8',
     );
   } catch (e) {
-    logger.log(e);
+    errors.expected('reading Budget.yfull from the YNAB4 export', e);
     throw new Error('Error reading Budget.yfull file');
   }
 
   try {
     return JSON.parse(contents);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing Budget.yfull from the YNAB4 export', e);
     throw new Error('Error parsing Budget.yfull file');
   }
 }

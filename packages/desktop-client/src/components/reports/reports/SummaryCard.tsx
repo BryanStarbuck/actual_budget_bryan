@@ -8,6 +8,7 @@ import type {
   SummaryContent,
   SummaryWidget,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection, tryOr } from '@actual-app/error-file';
 
 import { DateRange } from '#components/reports/DateRange';
 import { ReportCard } from '#components/reports/ReportCard';
@@ -18,6 +19,10 @@ import { summarySpreadsheet } from '#components/reports/spreadsheets/summary-spr
 import { SummaryNumber } from '#components/reports/SummaryNumber';
 import { useReport } from '#components/reports/useReport';
 import { useLocale } from '#hooks/useLocale';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/reports/SummaryCard.tsx',
+);
 
 type SummaryCardProps = {
   widgetId: string;
@@ -44,7 +49,11 @@ export function SummaryCard({
         latestTrans ? latestTrans.date : monthUtils.currentDay(),
       );
     }
-    void fetchLatestTransaction();
+    reportRejection(
+      errors,
+      'loading the latest transaction date',
+      fetchLatestTransaction(),
+    );
   }, []);
 
   const [start, end] = calculateTimeRange(
@@ -60,14 +69,12 @@ export function SummaryCard({
   const content = useMemo(
     () =>
       (meta?.content
-        ? (() => {
-            try {
-              return JSON.parse(meta.content);
-            } catch (error) {
-              console.error('Failed to parse meta.content:', error);
-              return { type: 'sum' };
-            }
-          })()
+        ? tryOr(
+            errors,
+            'parsing the summary card settings',
+            () => JSON.parse(meta.content),
+            { type: 'sum' },
+          )
         : { type: 'sum' }) as SummaryContent,
     [meta],
   );

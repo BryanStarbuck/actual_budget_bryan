@@ -35,6 +35,12 @@ import type {
   TransactionEntity,
   TransactionFilterEntity,
 } from '@actual-app/core/types/models';
+import {
+  errorFileFor,
+  guard,
+  reportBoundaryError,
+  reportRejection,
+} from '@actual-app/error-file';
 import { debounce, isEqual } from 'es-toolkit/compat';
 import { t } from 'i18next';
 import { v4 as uuidv4 } from 'uuid';
@@ -95,6 +101,14 @@ import { updateNewTransactions } from '#transactions/transactionsSlice';
 
 import { AccountEmptyMessage } from './AccountEmptyMessage';
 import { AccountHeader } from './Header';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/accounts/Account.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering the account page',
+);
 
 type ConditionEntity = Partial<RuleConditionEntity> | TransactionFilterEntity;
 
@@ -386,7 +400,9 @@ class AccountInternal extends PureComponent<
       undo.setUndoState('undoEvent', null);
     };
 
-    const unlistens = [listen('undo-event', onUndo)];
+    const unlistens = [
+      listen('undo-event', guard(errors, 'applying an undo event', onUndo)),
+    ];
 
     this.unlisten = () => {
       unlistens.forEach(unlisten => unlisten());
@@ -400,7 +416,11 @@ class AccountInternal extends PureComponent<
     // when an undo changes the location to this page)
     const lastUndoEvent = undo.getUndoState('undoEvent');
     if (lastUndoEvent) {
-      void onUndo(lastUndoEvent);
+      reportRejection(
+        errors,
+        'applying the pending undo event',
+        onUndo(lastUndoEvent),
+      );
     }
   }
 
@@ -453,14 +473,19 @@ class AccountInternal extends PureComponent<
   };
 
   refetchTransactions = async () => {
-    void this.paged?.run();
+    reportRejection(errors, 'refetching the transactions', this.paged?.run());
   };
 
   fetchTransactions = (filterConditions?: ConditionEntity[]) => {
     const query = this.makeRootTransactionsQuery();
     this.rootQuery = this.currentQuery = query;
-    if (filterConditions) void this.applyFilters(filterConditions);
-    else this.updateQuery(query);
+    if (filterConditions) {
+      reportRejection(
+        errors,
+        'applying the transaction filters',
+        this.applyFilters(filterConditions),
+      );
+    } else this.updateQuery(query);
 
     if (this.props.accountId) {
       this.props.dispatch(markAccountRead({ id: this.props.accountId }));
@@ -557,6 +582,9 @@ class AccountInternal extends PureComponent<
             }, 0);
           },
         );
+      },
+      onError: error => {
+        errors.caught('running the account transactions query', error);
       },
       options: {
         pageCount: 150,
@@ -660,10 +688,14 @@ class AccountInternal extends PureComponent<
       accountName && accountName.replace(/[()]/g, '').replace(/\s+/g, '-');
     const filename = `${normalizedName || 'transactions'}.csv`;
 
-    void window.Actual.saveFile(
-      exportedTransactions,
-      filename,
-      t('Export transactions'),
+    reportRejection(
+      errors,
+      'saving the exported transactions file',
+      window.Actual.saveFile(
+        exportedTransactions,
+        filename,
+        t('Export transactions'),
+      ),
     );
   };
 
@@ -767,7 +799,7 @@ class AccountInternal extends PureComponent<
       // Fetch updated transactions once at the end
       this.fetchTransactions();
     } catch (error) {
-      console.error('Error applying rules:', error);
+      errors.caught('applying rules to the transactions', error);
       this.props.dispatch(
         addNotification({
           notification: {
@@ -876,13 +908,21 @@ class AccountInternal extends PureComponent<
         break;
       case 'export':
         const accountName = this.getAccountTitle(account, accountId);
-        void this.onExport(accountName);
+        reportRejection(
+          errors,
+          'exporting the transactions',
+          this.onExport(accountName),
+        );
         break;
       case 'remove-sorting': {
         this.setState({ sort: null }, () => {
           const filterConditions = this.state.filterConditions;
           if (filterConditions.length > 0) {
-            void this.applyFilters([...filterConditions]);
+            reportRejection(
+              errors,
+              'reapplying the transaction filters',
+              this.applyFilters([...filterConditions]),
+            );
           } else {
             this.fetchTransactions();
           }
@@ -1136,35 +1176,51 @@ class AccountInternal extends PureComponent<
   };
 
   onShowTransactions = async (ids: string[]) => {
-    void this.onApplyFilter({
-      customName: t('Selected transactions'),
-      queryFilter: { id: { $oneof: ids } },
-    });
+    reportRejection(
+      errors,
+      'filtering to the selected transactions',
+      this.onApplyFilter({
+        customName: t('Selected transactions'),
+        queryFilter: { id: { $oneof: ids } },
+      }),
+    );
   };
 
   onBatchEdit = (name: keyof TransactionEntity, ids: string[]) => {
-    void this.props.onBatchEdit({
-      name,
-      ids,
-      onSuccess: updatedIds => {
-        void this.refetchTransactions();
+    reportRejection(
+      errors,
+      'batch editing the transactions',
+      this.props.onBatchEdit({
+        name,
+        ids,
+        onSuccess: updatedIds => {
+          void this.refetchTransactions();
 
-        if (this.table.current) {
-          this.table.current.edit(updatedIds[0], 'select', false);
-        }
-      },
-    });
+          if (this.table.current) {
+            this.table.current.edit(updatedIds[0], 'select', false);
+          }
+        },
+      }),
+    );
   };
 
   onBatchDuplicate = (ids: string[]) => {
-    void this.props.onBatchDuplicate({
-      ids,
-      onSuccess: this.refetchTransactions,
-    });
+    reportRejection(
+      errors,
+      'duplicating the selected transactions',
+      this.props.onBatchDuplicate({
+        ids,
+        onSuccess: this.refetchTransactions,
+      }),
+    );
   };
 
   onBatchDelete = (ids: string[]) => {
-    void this.props.onBatchDelete({ ids, onSuccess: this.refetchTransactions });
+    reportRejection(
+      errors,
+      'deleting the selected transactions',
+      this.props.onBatchDelete({ ids, onSuccess: this.refetchTransactions }),
+    );
   };
 
   onMakeAsSplitTransaction = async (ids: string[]) => {
@@ -1326,18 +1382,26 @@ class AccountInternal extends PureComponent<
   };
 
   onBatchLinkSchedule = (ids: string[]) => {
-    void this.props.onBatchLinkSchedule({
-      ids,
-      account: this.props.accounts.find(a => a.id === this.props.accountId),
-      onSuccess: this.refetchTransactions,
-    });
+    reportRejection(
+      errors,
+      'linking the selected transactions to a schedule',
+      this.props.onBatchLinkSchedule({
+        ids,
+        account: this.props.accounts.find(a => a.id === this.props.accountId),
+        onSuccess: this.refetchTransactions,
+      }),
+    );
   };
 
   onBatchUnlinkSchedule = (ids: string[]) => {
-    void this.props.onBatchUnlinkSchedule({
-      ids,
-      onSuccess: this.refetchTransactions,
-    });
+    reportRejection(
+      errors,
+      'unlinking the selected transactions from a schedule',
+      this.props.onBatchUnlinkSchedule({
+        ids,
+        onSuccess: this.refetchTransactions,
+      }),
+    );
   };
 
   onCreateRule = async (ids: string[]) => {
@@ -1433,7 +1497,11 @@ class AccountInternal extends PureComponent<
       filterConditionsOp: value,
       filterId: { ...state.filterId, status: 'changed' } as SavedFilter,
     }));
-    void this.applyFilters([...this.state.filterConditions]);
+    reportRejection(
+      errors,
+      'applying the transaction filters',
+      this.applyFilters([...this.state.filterConditions]),
+    );
     if (this.state.search !== '') {
       this.onSearch(this.state.search);
     }
@@ -1445,13 +1513,21 @@ class AccountInternal extends PureComponent<
         f => f.id === this.state.filterId?.id,
       );
       this.setState({ filterConditionsOp: savedFilter.conditionsOp ?? 'and' });
-      void this.applyFilters([...savedFilter.conditions]);
+      reportRejection(
+        errors,
+        'applying the transaction filters',
+        this.applyFilters([...savedFilter.conditions]),
+      );
     } else {
       if (savedFilter.status) {
         this.setState({
           filterConditionsOp: savedFilter.conditionsOp ?? 'and',
         });
-        void this.applyFilters([...(savedFilter.conditions ?? [])]);
+        reportRejection(
+          errors,
+          'applying the transaction filters',
+          this.applyFilters([...(savedFilter.conditions ?? [])]),
+        );
       }
     }
     this.setState(state => ({
@@ -1462,7 +1538,11 @@ class AccountInternal extends PureComponent<
   onClearFilters = () => {
     this.setState({ filterConditionsOp: 'and' });
     this.setState({ filterId: undefined });
-    void this.applyFilters([]);
+    reportRejection(
+      errors,
+      'applying the transaction filters',
+      this.applyFilters([]),
+    );
     if (this.state.search !== '') {
       this.onSearch(this.state.search);
     }
@@ -1472,9 +1552,13 @@ class AccountInternal extends PureComponent<
     oldCondition: RuleConditionEntity,
     updatedCondition: RuleConditionEntity,
   ) => {
-    void this.applyFilters(
-      this.state.filterConditions.map(c =>
-        c === oldCondition ? updatedCondition : c,
+    reportRejection(
+      errors,
+      'applying the transaction filters',
+      this.applyFilters(
+        this.state.filterConditions.map(c =>
+          c === oldCondition ? updatedCondition : c,
+        ),
       ),
     );
     this.setState(state => ({
@@ -1489,8 +1573,12 @@ class AccountInternal extends PureComponent<
   };
 
   onDeleteFilter = (condition: RuleConditionEntity) => {
-    void this.applyFilters(
-      this.state.filterConditions.filter(c => c !== condition),
+    reportRejection(
+      errors,
+      'applying the transaction filters',
+      this.applyFilters(
+        this.state.filterConditions.filter(c => c !== condition),
+      ),
     );
     if (this.state.filterConditions.length === 1) {
       this.setState({ filterId: undefined, filterConditionsOp: 'and' });
@@ -1528,7 +1616,11 @@ class AccountInternal extends PureComponent<
         filterId: { ...savedFilter, status: 'saved' },
       });
       this.setState({ filterConditionsOp: savedFilter.conditionsOp });
-      void this.applyFilters([...savedFilter.conditions]);
+      reportRejection(
+        errors,
+        'applying the transaction filters',
+        this.applyFilters([...savedFilter.conditions]),
+      );
     } else {
       // A condition was passed in.
       const condition = conditionOrSavedFilter;
@@ -1544,7 +1636,11 @@ class AccountInternal extends PureComponent<
           status: state.filterId && 'changed',
         } as SavedFilter,
       }));
-      void this.applyFilters([...filterConditions, condition]);
+      reportRejection(
+        errors,
+        'applying the transaction filters',
+        this.applyFilters([...filterConditions, condition]),
+      );
     }
 
     if (this.state.search !== '') {
@@ -1713,7 +1809,11 @@ class AccountInternal extends PureComponent<
       // called directly from UI by sorting a column.
       // active filters need to be applied before sorting
       case isFiltered:
-        void this.applyFilters([...filterConditions]);
+        reportRejection(
+          errors,
+          'applying the transaction filters',
+          this.applyFilters([...filterConditions]),
+        );
         sortCurrentQuery(this, sortField, sortAscDesc);
         break;
 
@@ -2103,7 +2203,10 @@ export function Account() {
     createPayee.mutateAsync({ name });
 
   return (
-    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={FeatureErrorFallback}
+    >
       <SchedulesProvider query={schedulesQuery}>
         <SplitsExpandedProvider
           initialMode={expandSplits ? 'collapse' : 'expand'}

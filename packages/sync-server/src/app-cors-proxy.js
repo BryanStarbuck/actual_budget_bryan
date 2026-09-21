@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 
@@ -5,6 +6,8 @@ import { config } from './load-config';
 import { requestLoggerMiddleware } from './util/middlewares';
 import { isBlockedIp } from './util/ssrf';
 import { validateSession } from './util/validate-user';
+
+const errors = errorFileFor('sync-server/src/app-cors-proxy.js');
 
 const app = express();
 
@@ -52,7 +55,7 @@ async function fetchAllowlist() {
     console.log('Updated plugin allowlist:', allowlistedRepos);
     return allowlistedRepos;
   } catch (error) {
-    console.error('Failed to fetch plugin allowlist:', error);
+    errors.caught('fetching the plugin allowlist', error);
     // Return empty array if fetch fails to be safe
     allowlistedRepos = [];
     return allowlistedRepos;
@@ -101,17 +104,13 @@ function isUrlAllowed(targetUrl) {
           return true;
         }
       } catch (e) {
-        console.warn(
-          'Invalid repository URL in allowlist:',
-          repoUrl,
-          e.message,
-        );
+        errors.warn('parsing a repository URL from the plugin allowlist', e);
       }
     }
 
     return false;
   } catch (e) {
-    console.warn('Invalid target URL:', targetUrl, e.message);
+    errors.expected('parsing the proxy target URL', e);
     return false;
   }
 }
@@ -141,7 +140,8 @@ app.use('/', async (req, res) => {
   let url;
   try {
     url = new URL(targetUrlString);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the url query parameter', e);
     return res.status(400).json({ error: 'Invalid url parameter' });
   }
 
@@ -149,7 +149,7 @@ app.use('/', async (req, res) => {
   try {
     await fetchAllowlist();
   } catch (error) {
-    console.error('Failed to fetch allowlist:', error);
+    errors.caught('refreshing the plugin allowlist', error);
     return res.status(403).json({
       error: 'URL not allowed',
       message: 'Unable to verify allowlist',
@@ -230,8 +230,9 @@ app.use('/', async (req, res) => {
       const text = await response.text();
       try {
         res.json(JSON.parse(text));
-      } catch {
+      } catch (e) {
         // If it's not valid JSON, treat as text
+        errors.expected('parsing the proxied response as JSON', e);
         res.set('Content-Type', contentType || 'text/plain');
         res.send(text);
       }
@@ -252,6 +253,7 @@ app.use('/', async (req, res) => {
       res.json(binaryData);
     }
   } catch (err) {
+    errors.caught('proxying the plugin request', err);
     res
       .status(500)
       .json({ error: 'Error proxying request', details: err.message });

@@ -1,8 +1,13 @@
+import { errorFileFor } from '@actual-app/error-file';
 import { HyperFormula } from 'hyperformula';
 
 import { bootstrapHyperFormula } from '#util/bootstrapHyperFormula';
 
 import { budgetQueryDimensions } from './formulaCatalog';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/formula/formulaBadgeRanges.ts',
+);
 
 type FormulaMode = 'transaction' | 'query';
 
@@ -680,7 +685,9 @@ export function getFormulaBadgeRangeResult({
       ),
       status: 'ok',
     };
-  } catch {
+  } catch (e) {
+    // A half-typed formula that does not parse yet is a normal editing state (R7).
+    errors.expected('parsing a formula for badge ranges', e);
     return { ranges: [], status: 'failed' };
   }
 }

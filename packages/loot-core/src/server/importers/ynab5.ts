@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
 import { logger } from '#platform/server/log';
@@ -19,6 +20,8 @@ import type {
   Subtransaction,
   Transaction,
 } from './ynab5-types';
+
+const errors = errorFileFor('loot-core/src/server/importers/ynab5.ts');
 
 const MAX_RETRY = 20;
 
@@ -348,9 +351,12 @@ async function importCategories(
         return { id, name };
       } catch (e) {
         if (count >= MAX_RETRY) {
+          errors.caught('creating a category group during a YNAB5 import', e);
           const errorMsg = normalizeError(e);
           throw Error('Unable to create category group: ' + errorMsg);
         }
+        // The name is taken: retry with a numbered suffix
+        errors.expected('creating a category group with a unique name', e);
         count += 1;
       }
     }
@@ -373,9 +379,12 @@ async function importCategories(
         return { id, name };
       } catch (e) {
         if (count >= MAX_RETRY) {
+          errors.caught('creating a category during a YNAB5 import', e);
           const errorMsg = normalizeError(e);
           throw Error('Unable to create category: ' + errorMsg);
         }
+        // The name is taken: retry with a numbered suffix
+        errors.expected('creating a category with a unique name', e);
         count += 1;
       }
     }
@@ -519,13 +528,7 @@ async function importPayeeLocations(
       });
       tick();
     } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : String(error ?? 'Unknown error');
-      logger.error(
-        `Failed to import location for payee ${actualPayeeId} at (${latitude}, ${longitude}): ${errorMessage}`,
-      );
+      errors.caught('importing a payee location', error, { id: actualPayeeId });
     }
   }
 }
@@ -914,9 +917,12 @@ export async function importScheduledTransactions(
         });
       } catch (e) {
         if (count >= MAX_RETRY) {
+          errors.caught('creating a schedule during a YNAB5 import', e);
           const errorMsg = normalizeError(e);
           throw Error(errorMsg);
         }
+        // The name is taken: retry with a numbered suffix
+        errors.expected('creating a schedule with a unique name', e);
         params.name = `${baseName} (${count})`;
         count += 1;
       }

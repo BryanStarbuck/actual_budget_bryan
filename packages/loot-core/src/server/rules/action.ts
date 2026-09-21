@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import * as dateFns from 'date-fns';
 import * as Handlebars from 'handlebars';
 import { HyperFormula } from 'hyperformula';
@@ -15,6 +16,8 @@ import { FIELD_TYPES } from '#shared/rules';
 import { amountToInteger } from '#shared/util';
 
 import { assert } from './rule-utils';
+
+const errors = errorFileFor('loot-core/src/server/rules/action.ts');
 
 if (!HyperFormula.getRegisteredLanguagesCodes().includes('enUS')) {
   HyperFormula.registerLanguage('enUS', enUS);
@@ -63,7 +66,8 @@ export class Action {
         try {
           this.handlebarsTemplate({});
         } catch (e) {
-          logger.debug(e);
+          // A bad template is a validation answer, not a fault (R7)
+          errors.expected('validating a rule Handlebars template', e);
           assert(false, 'invalid-template', `Invalid Handlebars template`);
         }
       }
@@ -143,6 +147,8 @@ export class Action {
               }
             }
           } catch (err) {
+            // Reported to the user through _ruleErrors
+            errors.expected('executing a rule formula', err);
             const error = `Error executing formula for "${this.field}": ${err instanceof Error ? err.message : String(err)}`;
             object._ruleErrors.push(error);
             break;
@@ -223,6 +229,8 @@ export class Action {
                 object.amount = numValue;
               }
             } catch (err) {
+              // Reported to the user through _ruleErrors
+              errors.expected('executing a split amount formula', err);
               object._ruleErrors.push(
                 `Error executing formula for split amount: ${err instanceof Error ? err.message : String(err)}`,
               );
@@ -367,13 +375,14 @@ export class Action {
 
       return cellValue;
     } catch (err) {
-      logger.error('Formula execution error:', err);
+      // The caller turns this into a user-visible rule error (R7)
+      errors.expected('evaluating a rule formula', err);
       throw err;
     } finally {
       try {
         hfInstance?.destroy();
       } catch (err) {
-        logger.error('Error destroying HyperFormula instance:', err);
+        errors.caught('destroying the HyperFormula instance', err);
       }
     }
   }

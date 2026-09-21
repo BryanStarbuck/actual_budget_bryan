@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 
 import { isAdmin } from '#account-db';
@@ -11,6 +12,8 @@ import {
 import { isValidFileId } from '#util/paths';
 
 import { pluggyaiService } from './pluggyai-service';
+
+const errors = errorFileFor('sync-server/src/app-pluggyai/app-pluggyai.js');
 
 const app = express();
 export { app as handlers };
@@ -115,6 +118,7 @@ app.post(
         },
       });
     } catch (error) {
+      errors.caught('listing the Pluggy accounts', error);
       res.send({
         status: 'ok',
         data: {
@@ -264,6 +268,7 @@ app.post(
         },
       });
     } catch (error) {
+      errors.caught('fetching the Pluggy transactions', error, { accountId });
       res.send({
         status: 'ok',
         data: {

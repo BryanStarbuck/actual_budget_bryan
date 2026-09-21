@@ -15,6 +15,7 @@ import type {
   PayeeEntity,
 } from '@actual-app/core/types/models';
 import type { SyncedPrefs } from '@actual-app/core/types/prefs';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 
 import { ChooseGraph } from '#components/reports/ChooseGraph';
 import { getLiveRange } from '#components/reports/getLiveRange';
@@ -25,6 +26,14 @@ import { createGroupedSpreadsheet } from '#components/reports/spreadsheets/group
 import { useReport } from '#components/reports/useReport';
 import { useDateFormat } from '#hooks/useDateFormat';
 import { useSyncedPref } from '#hooks/useSyncedPref';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/reports/GetCardData.tsx',
+);
+const reportRenderError = reportBoundaryError(
+  errors,
+  'rendering a report card',
+);
 
 function ErrorFallback() {
   return (
@@ -185,7 +194,10 @@ export function GetCardData({
     graphData && groupedData ? { ...graphData, groupedData } : graphData;
 
   return data?.data ? (
-    <ErrorBoundary FallbackComponent={ErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={ErrorFallback}
+    >
       <ChooseGraph
         data={data}
         mode={report.mode}

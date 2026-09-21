@@ -11,8 +11,19 @@ default:
 install:
     cd "{{root}}" && npm install --no-audit --no-fund
 
+# Install only when mcp/node_modules is missing — a fresh clone or a `git clean` leaves it absent, and
+# tsc then fails with "Cannot find module '@modelcontextprotocol/sdk/...'".
+_ensure-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}"
+    if [ ! -d node_modules/@modelcontextprotocol/sdk ] || [ ! -d node_modules/zod ]; then
+      echo "mcp deps missing — installing into mcp/node_modules"
+      npm install --no-audit --no-fund
+    fi
+
 # Generate instructions.ts from ai/mcp_prompt.md, compile, stamp executable.
-build:
+build: _ensure-deps
     cd "{{root}}" && npm run build
 
 typecheck:

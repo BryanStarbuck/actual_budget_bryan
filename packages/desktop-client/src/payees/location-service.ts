@@ -4,11 +4,18 @@ import type {
   NearbyPayeeEntity,
   PayeeLocationEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
+import type { ErrorFile } from '@actual-app/error-file';
 
 import type {
   GeolocationAdapter,
   LocationApiClient,
 } from './location-adapters';
+
+// Annotated so TypeScript sees `rethrow(): never` and does not ask for a return after it.
+const errors: ErrorFile = errorFileFor(
+  'desktop-client/src/payees/location-service.ts',
+);
 
 export class LocationService {
   private currentPosition: LocationCoordinates | null = null;
@@ -34,7 +41,8 @@ export class LocationService {
       this.lastLocationTime = Date.now();
       return this.currentPosition;
     } catch (error) {
-      console.warn('Geolocation error:', error);
+      // Usually the user declined the permission, or the device has no fix
+      errors.expected('reading the current geolocation', error);
       throw error;
     }
   }
@@ -46,8 +54,7 @@ export class LocationService {
     try {
       return await this.apiClient.saveLocation(payeeId, coordinates);
     } catch (error) {
-      console.error('Failed to save payee location:', error);
-      throw error;
+      errors.rethrow('saving a payee location', error);
     }
   }
 
@@ -55,8 +62,7 @@ export class LocationService {
     try {
       return await this.apiClient.getLocations(payeeId);
     } catch (error) {
-      console.error('Failed to get payee locations:', error);
-      throw error;
+      errors.rethrow('loading the locations of a payee', error);
     }
   }
 
@@ -64,8 +70,7 @@ export class LocationService {
     try {
       await this.apiClient.deleteLocation(locationId);
     } catch (error) {
-      console.error('Failed to delete payee location:', error);
-      throw error;
+      errors.rethrow('deleting a payee location', error);
     }
   }
 
@@ -76,7 +81,7 @@ export class LocationService {
     try {
       return await this.apiClient.getNearbyPayees(coordinates, maxDistance);
     } catch (error) {
-      console.error('Failed to get nearby payees:', error);
+      errors.caught('finding the payees near a location', error);
       return [];
     }
   }

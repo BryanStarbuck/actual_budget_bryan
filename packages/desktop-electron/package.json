@@ -15,6 +15,7 @@
     "e2e": "npx playwright test"
   },
   "dependencies": {
+    "@actual-app/error-file": "workspace:*",
     "@actual-app/sync-server": "workspace:*",
     "better-sqlite3": "^12.11.1"
   },

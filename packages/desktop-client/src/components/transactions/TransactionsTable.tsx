@@ -79,6 +79,7 @@ import type {
   ScheduleEntity,
   TransactionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { format as formatDate, parseISO } from 'date-fns';
 
 import { getAccountsById } from '#accounts/accountsSlice';
@@ -167,6 +168,10 @@ import type {
   TransactionUpdateFunction,
 } from './table/utils';
 import { useTransactionRowContextActions } from './useTransactionRowContextActions';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/transactions/TransactionsTable.tsx',
+);
 
 type AmountColumnWidths = {
   amount: number; // Applies to both debit and credit columns
@@ -1290,40 +1295,45 @@ const Transaction = memo(function Transaction({
 
         if (transferIds.length > 0) {
           const seq = ++transferDateSyncSeq.current;
-          void (async () => {
-            const updated: { id: string; date: string }[] = transferIds.map(
-              id => ({ id, date: value }),
-            );
+          reportRejection(
+            errors,
+            'syncing the transfer date',
+            (async () => {
+              const updated: { id: string; date: string }[] = transferIds.map(
+                id => ({ id, date: value }),
+              );
 
-            // sync split parent if the other leg is a split child
-            const { data } = (await aqlQuery(
-              q('transactions')
-                .filter({ id: { $oneof: transferIds } })
-                .select(['id', 'is_child', 'parent_id']),
-            )) as {
-              data: Pick<TransactionEntity, 'id' | 'is_child' | 'parent_id'>[];
-            };
-            updated.push(
-              ...data
-                .filter(
-                  (t): t is typeof t & { parent_id: string } =>
-                    t.is_child === true && typeof t.parent_id === 'string',
-                )
-                .map(t => ({ id: t.parent_id, date: value })),
-            );
+              // sync split parent if the other leg is a split child
+              const { data } = (await aqlQuery(
+                q('transactions')
+                  .filter({ id: { $oneof: transferIds } })
+                  .select(['id', 'is_child', 'parent_id']),
+              )) as {
+                data: Pick<
+                  TransactionEntity,
+                  'id' | 'is_child' | 'parent_id'
+                >[];
+              };
+              updated.push(
+                ...data
+                  .filter(
+                    (t): t is typeof t & { parent_id: string } =>
+                      t.is_child === true && typeof t.parent_id === 'string',
+                  )
+                  .map(t => ({ id: t.parent_id, date: value })),
+              );
 
-            // a newer date edit started while we were querying: let it win
-            if (seq !== transferDateSyncSeq.current) {
-              return;
-            }
+              // a newer date edit started while we were querying: let it win
+              if (seq !== transferDateSyncSeq.current) {
+                return;
+              }
 
-            await send('transactions-batch-update', {
-              updated,
-              runTransfers: false,
-            });
-          })().catch(error => {
-            console.error('Failed to sync transfer date:', error);
-          });
+              await send('transactions-batch-update', {
+                updated,
+                runTransfers: false,
+              });
+            })(),
+          );
         }
       }
     }
@@ -3160,7 +3170,11 @@ export const TransactionTable = forwardRef(
         if (id === targetId) {
           return;
         }
-        void onReorder?.(id, dropPos, targetId);
+        reportRejection(
+          errors,
+          'reordering transactions',
+          onReorder?.(id, dropPos, targetId),
+        );
       },
       [onReorder],
     );
@@ -3388,7 +3402,8 @@ export const TransactionTable = forwardRef(
                 ),
               );
               newNavigator.onEdit('temp', 'date');
-            } catch {
+            } catch (e) {
+              errors.caught('creating a schedule from a transaction', e);
               dispatch(
                 addNotification({
                   notification: {
@@ -3836,10 +3851,9 @@ export const TransactionTable = forwardRef(
           t => t.amount === 0,
         );
         if (!parentTransaction) {
-          console.error(
-            'Parent transaction not found for transaction',
-            transaction,
-          );
+          errors.warn('finding the parent of a split transaction', undefined, {
+            transactionId: transaction?.id,
+          });
           return;
         }
 

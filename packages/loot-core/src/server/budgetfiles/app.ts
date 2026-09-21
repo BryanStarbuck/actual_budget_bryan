@@ -1,5 +1,6 @@
 // @ts-strict-ignore
 import * as CRDT from '@actual-app/crdt';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { createTestBudget } from '#mocks/budget';
 import { captureBreadcrumb, captureException } from '#platform/exceptions';
@@ -45,6 +46,8 @@ import {
   startBackupService,
   stopBackupService,
 } from './backups';
+
+const errors = errorFileFor('loot-core/src/server/budgetfiles/app.ts');
 
 const DEMO_BUDGET_ID = '_demo-budget';
 const TEST_BUDGET_ID = '_test-budget';
@@ -114,7 +117,7 @@ async function getBudgets() {
         try {
           prefs = JSON.parse(await fs.readFile(prefsPath));
         } catch (e) {
-          logger.log('Error parsing metadata:', e.stack);
+          errors.caught('parsing a budget metadata file', e);
           return null;
         }
 
@@ -166,7 +169,7 @@ async function uploadBudget({ id }: { id?: Budget['id'] } = {}): Promise<{
   try {
     await cloudStorage.upload();
   } catch (e) {
-    logger.log(e);
+    errors.caught('uploading the budget file', e);
     if (e.type === 'FileUploadError') {
       return { error: e };
     }
@@ -191,6 +194,8 @@ async function downloadBudget({
     result = await cloudStorage.download(cloudFileId);
   } catch (e) {
     if (e.type === 'FileDownloadError') {
+      // A download refusal is reported back to the caller as an answer (R7).
+      errors.expected('downloading the budget file', e);
       if (e.reason === 'file-exists' && e.meta.id) {
         await prefs.loadPrefs(e.meta.id);
         const name = prefs.getPrefs().budgetName;
@@ -271,10 +276,11 @@ async function closeBudget() {
 
   try {
     await asyncStorage.setItem('lastBudget', '');
-  } catch {
+  } catch (e) {
     // This might fail if we are shutting down after failing to load a
     // budget. We want to unload whatever has already been loaded but
     // be resilient to anything failing
+    errors.expected('clearing the last-opened budget while closing', e);
   }
 
   prefs.unloadPrefs();
@@ -292,8 +298,9 @@ async function deleteBudget({
   // If it's a cloud file, you can delete it from the server by
   // passing its cloud id
   if (cloudFileId) {
-    await cloudStorage.removeFile(cloudFileId).catch(() => {
-      // Ignore errors
+    await cloudStorage.removeFile(cloudFileId).catch(e => {
+      // Ignore errors: the local delete still goes ahead
+      errors.caught('removing the cloud copy of a deleted budget', e);
     });
   }
 
@@ -307,7 +314,8 @@ async function deleteBudget({
       db.closeDatabase();
       const budgetDir = fs.getBudgetDir(id);
       await fs.removeDirRecursively(budgetDir);
-    } catch {
+    } catch (e) {
+      errors.caught('deleting the local budget files', e);
       return 'fail';
     }
   }
@@ -364,13 +372,17 @@ async function duplicateBudget({
       fs.join(newBudgetDir, 'db.sqlite'),
     );
   } catch (error) {
+    errors.caught('duplicating the budget files', error);
     // Clean up any partially created files
     try {
       const newBudgetDir = fs.getBudgetDir(newId);
       if (await fs.exists(newBudgetDir)) {
         await fs.removeDirRecursively(newBudgetDir);
       }
-    } catch {} // Ignore cleanup errors
+    } catch (e) {
+      // Ignore cleanup errors
+      errors.caught('cleaning up a partially duplicated budget', e);
+    }
     throw new Error(`Failed to duplicate budget file: ${error.message}`);
   }
 
@@ -385,9 +397,9 @@ async function duplicateBudget({
     try {
       await cloudStorage.upload();
     } catch (error) {
-      logger.warn('Failed to sync duplicated budget to cloud:', error);
       // Ignore any errors uploading. If they are offline they should
       // still be able to create files.
+      errors.warn('uploading the duplicated budget', error);
     }
   }
 
@@ -453,9 +465,10 @@ async function createBudget({
   if (!avoidUpload && !testMode) {
     try {
       await cloudStorage.upload();
-    } catch {
+    } catch (e) {
       // Ignore any errors uploading. If they are offline they should
       // still be able to create files.
+      errors.warn('uploading the new budget', e);
     }
   }
 
@@ -581,16 +594,16 @@ async function _loadBudget(id: Budget['id']): Promise<{
   try {
     await updateVersion();
   } catch (e) {
-    logger.warn('Error updating', e);
     let result;
     if (e.message.includes('out-of-sync-migrations')) {
+      // The app is too old for the file; the caller shows the user (R7)
+      errors.expected('running the budget migrations', e);
       result = { error: 'out-of-sync-migrations' };
     } else if (e.message.includes('out-of-sync-data')) {
+      errors.expected('running the budget migrations', e);
       result = { error: 'out-of-sync-data' };
     } else {
       captureException(e);
-      logger.info('Error updating budget ' + id, e);
-      logger.log('Error updating budget', e);
       result = { error: 'loading-budget' };
     }
 

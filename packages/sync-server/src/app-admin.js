@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -10,6 +11,8 @@ import {
 } from './util/middlewares';
 import { validateSession } from './util/validate-user';
 
+const errors = errorFileFor('sync-server/src/app-admin.js');
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -21,7 +24,8 @@ app.get('/owner-created/', (req, res) => {
   try {
     const ownerCount = UserService.getOwnerCount();
     res.json(ownerCount > 0);
-  } catch {
+  } catch (e) {
+    errors.caught('reading the owner count', e);
     res.status(500).json({ error: 'Failed to retrieve owner count' });
   }
 });

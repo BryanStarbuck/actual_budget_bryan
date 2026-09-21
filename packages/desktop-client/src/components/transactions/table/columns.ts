@@ -1,5 +1,11 @@
 import { useTranslation } from 'react-i18next';
 
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/transactions/table/columns.ts',
+);
+
 // The set of columns in the transaction table, in their default order.
 export const TRANSACTION_TABLE_COLUMN_IDS = [
   'date',
@@ -120,8 +126,9 @@ export function parseTransactionTableColumns(
           }
         }
       }
-    } catch {
+    } catch (e) {
       // Malformed pref value; fall back to the defaults
+      errors.expected('parsing the saved transaction column layout', e);
       saved = [];
     }
   }

@@ -8,6 +8,7 @@ import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import type { CleanupTemplate } from '@actual-app/core/types/models/cleanup-templates';
 import type { Template } from '@actual-app/core/types/models/templates';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { cleanupToNotes } from '#components/budget/goals/cleanupModel';
 import { Link } from '#components/common/Link';
@@ -17,6 +18,10 @@ import { useCategories } from '#hooks/useCategories';
 import { useCategory } from '#hooks/useCategory';
 import { useCleanupGroups } from '#hooks/useCleanupGroups';
 import { useNotes } from '#hooks/useNotes';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/UnmigrateBudgetAutomationsModal.tsx',
+);
 
 // The UI's CategoryAutocomplete stores the income category id on a
 // percentage template, but text-template grammar addresses categories by
@@ -72,7 +77,8 @@ export function UnmigrateBudgetAutomationsModal({
         const cleanupText = cleanupToNotes(cleanup, groupName);
         const combined = [text, cleanupText].filter(Boolean).join('\n');
         if (mounted) setRendered(combined);
-      } catch {
+      } catch (e) {
+        errors.caught('rendering budget automations as note templates', e);
         if (mounted) setRendered('');
       }
     })();

@@ -10,6 +10,7 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { isElectron } from '@actual-app/core/shared/environment';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { css } from '@emotion/css';
 
 import { Link } from '#components/common/Link';
@@ -22,6 +23,10 @@ import { useDispatch, useSelector } from '#redux';
 import { loggedIn, signOut } from '#users/usersSlice';
 
 import { Title } from './subscribe/common';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/manager/ConfigServer.tsx',
+);
 
 export function ElectronServerConfig({
   onDoNotUseServer,
@@ -82,13 +87,17 @@ export function ElectronServerConfig({
       await window.globalThis.Actual.stopSyncServer();
       await window.globalThis.Actual.startSyncServer();
       setStartingSyncServer(false);
-      void initElectronSyncServerRunningStatus();
+      reportRejection(
+        errors,
+        'checking whether the built-in sync server is running',
+        initElectronSyncServerRunningStatus(),
+      );
       await setServerUrl(`http://localhost:${electronServerPort}`);
       void navigate('/');
     } catch (error) {
       setStartingSyncServer(false);
       setConfigError(t('Failed to configure sync server'));
-      console.error('Failed to configure sync server:', error);
+      errors.caught('configuring the built-in sync server', error);
     }
   };
 
@@ -102,7 +111,11 @@ export function ElectronServerConfig({
   };
 
   useEffect(() => {
-    void initElectronSyncServerRunningStatus();
+    reportRejection(
+      errors,
+      'checking whether the built-in sync server is running',
+      initElectronSyncServerRunningStatus(),
+    );
   }, []);
 
   async function dontUseSyncServer() {

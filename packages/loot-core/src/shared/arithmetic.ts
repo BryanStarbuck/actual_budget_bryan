@@ -1,4 +1,8 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { currencyToAmount } from './util';
+
+const errors = errorFileFor('loot-core/src/shared/arithmetic.ts');
 
 type ParserState = {
   str: string;
@@ -160,8 +164,9 @@ export function evalArithmetic(
   let result: number;
   try {
     result = evaluate(parse(expression));
-  } catch {
+  } catch (e) {
     // If it errors, return the default value
+    errors.expected('evaluating an arithmetic expression', e);
     return defaultValue;
   }
 

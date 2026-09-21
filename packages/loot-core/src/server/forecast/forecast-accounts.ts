@@ -1,7 +1,13 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { aqlQuery } from '#server/aql';
 import * as db from '#server/db';
 import { q } from '#shared/query';
 import type { AccountEntity, RuleConditionEntity } from '#types/models';
+
+const errors = errorFileFor(
+  'loot-core/src/server/forecast/forecast-accounts.ts',
+);
 
 type AccountCondition = Extract<RuleConditionEntity, { field: 'account' }>;
 type AccountMatchable = Pick<AccountEntity, 'id' | 'name' | 'offbudget'>;
@@ -48,7 +54,10 @@ export function matchesAccountCondition(
         return new RegExp(String(condition.value)).test(
           String(account.name).toLowerCase(),
         );
-      } catch {
+      } catch (e) {
+        // A user-written pattern that is not a valid regex simply
+        // matches nothing.
+        errors.expected('compiling an account rule regex', e);
         return false;
       }
     }

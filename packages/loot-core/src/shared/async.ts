@@ -1,3 +1,7 @@
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('loot-core/src/shared/async.ts');
+
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyFunction = (...args: any[]) => any;
 
@@ -40,6 +44,8 @@ export function sequential<T extends AnyFunction>(
         resolve(val);
       },
       (err: unknown) => {
+        // The rejection is forwarded to the caller's promise, which reports it.
+        errors.expected('forwarding a rejection from a sequenced call', err);
         pump();
         reject(err);
       },

@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 
@@ -10,6 +11,8 @@ import {
   requestLoggerMiddleware,
   validateSessionMiddleware,
 } from './util/middlewares';
+
+const errors = errorFileFor('sync-server/src/app-openid.ts');
 
 const app = express();
 app.use(express.json());
@@ -89,7 +92,8 @@ app.post('/config', openIdConfigRateLimiter, async (req, res) => {
   try {
     const openIdConfig = JSON.parse(auth.extra_data);
     res.send({ status: 'ok', data: { openId: openIdConfig } });
-  } catch {
+  } catch (e) {
+    errors.caught('parsing the stored OpenID configuration', e);
     res
       .status(500)
       .send({ status: 'error', reason: 'Invalid OpenID configuration' });

@@ -17,12 +17,16 @@
  * A green upstream /health with a 401 from /ping is the commonest first-run
  * failure there is, and the two have to be distinguishable (§8.0).
  */
+import { errorFileFor } from '@actual-app/error-file';
+
 import type { engineState } from '#machine/engine';
 import { knownBudgets, requireEngine } from '#machine/engine';
 import { describeRoutes, route } from '#machine/route';
 import type { AnyRouteDef } from '#machine/route';
 import { TIERS } from '#machine/tier';
 import { fields, takesNothing } from '#machine/validate';
+
+const errors = errorFileFor('sync-server/src/machine/routes/plane.ts');
 
 /** Published in /capabilities so a client can branch on a build, not a 404. */
 export const FEATURES: readonly string[] = ['plane'];
@@ -152,8 +156,10 @@ export const planeRoutes: AnyRouteDef[] = [
       if (ctx.args.probe === true) {
         try {
           await requireEngine(ctx.env);
-        } catch {
+        } catch (err) {
+          // The engine reports its own start failure; here it is an answer.
           // engineState() below carries the reason and the remediation.
+          errors.expected('probing the budget engine', err);
         }
       }
 

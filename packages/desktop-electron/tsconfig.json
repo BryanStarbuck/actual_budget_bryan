@@ -13,6 +13,8 @@
     "outDir": "build",
     "rootDir": "..",
     "tsBuildInfoFile": "build/.tsbuildinfo",
+    // vendor/error-file imports carry .ts (pm/error_err.mdx §4.6); emit them as .js.
+    "rewriteRelativeImportExtensions": true,
     "plugins": [
       {
         "name": "typescript-strict-plugin",

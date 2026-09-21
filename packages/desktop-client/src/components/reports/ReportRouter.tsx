@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 import { Route, Routes, useLocation } from 'react-router';
 
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
+
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import { useFeatureFlag } from '#hooks/useFeatureFlag';
 
@@ -20,10 +22,16 @@ import { Spending } from './reports/Spending';
 import { Summary } from './reports/Summary';
 import { ReportsDashboardRouter } from './ReportsDashboardRouter';
 
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/ReportRouter.tsx',
+);
+const reportRenderError = reportBoundaryError(errors, 'rendering a report');
+
 function ReportBoundary({ children }: { children: ReactNode }) {
   const location = useLocation();
   return (
     <ErrorBoundary
+      onError={reportRenderError}
       FallbackComponent={FeatureErrorFallback}
       resetKeys={[location.pathname]}
     >

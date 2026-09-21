@@ -5,10 +5,15 @@ import type {
   CategoryEntity,
   RuleConditionEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import type { useSpreadsheet } from '#hooks/useSpreadsheet';
 
 import type { BudgetMonthCell } from './budgetMonthCell';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/spreadsheets/budget-analysis-spreadsheet.ts',
+);
 
 type BudgetAnalysisIntervalData = {
   date: string;
@@ -221,7 +226,9 @@ export function createBudgetAnalysisSpreadsheet({
             ? (() => {
                 try {
                   return new RegExp(cond.value, 'i');
-                } catch {
+                } catch (e) {
+                  // A user-typed pattern that does not compile is an answer, not a fault (R7)
+                  errors.expected('compiling a category filter regex', e);
                   return null;
                 }
               })()

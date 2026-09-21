@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { aqlQuery } from '#server/aql';
 import * as db from '#server/db';
 import { batchMessages } from '#server/sync';
@@ -13,6 +15,8 @@ import { CategoryTemplateContext } from './category-template-context';
 import { tombstoneOrphanCleanupGroups } from './cleanup-groups';
 import { checkTemplateNotes, storeNoteTemplates } from './template-notes';
 import type { TemplateNotification } from './template-notification';
+
+const errors = errorFileFor('loot-core/src/server/budget/goal-template.ts');
 
 export function distributeRemainder(
   templateContexts: CategoryTemplateContext[],
@@ -236,7 +240,7 @@ async function computeTemplates(
     isTracking ? `total-saved` : `to-budget`,
   );
   const prioritiesSet = new Set<number>();
-  const errors: string[] = [];
+  const templateErrors: string[] = [];
   const orphanGoals: TemplateGoal[] = [];
   for (const category of categories) {
     const { id } = category;
@@ -263,7 +267,10 @@ async function computeTemplates(
         templateContext.getPriorities().forEach(p => prioritiesSet.add(p));
         templateContexts.push(templateContext);
       } catch (e) {
-        errors.push(`${category.name}: ${e.message}`);
+        // The failure is shown to the user in the template notification,
+        // so it is an answer rather than a fault (R7).
+        errors.expected('setting up a category template', e);
+        templateErrors.push(`${category.name}: ${e.message}`);
       }
 
       // do a reset of the goals that are orphaned
@@ -276,8 +283,12 @@ async function computeTemplates(
     }
   }
 
-  if (errors.length > 0) {
-    return { contexts: templateContexts, errors, orphanGoals };
+  if (templateErrors.length > 0) {
+    return {
+      contexts: templateContexts,
+      errors: templateErrors,
+      orphanGoals,
+    };
   }
 
   const priorities = new Int32Array([...prioritiesSet]).sort((a, b) => a - b);
@@ -296,7 +307,7 @@ async function computeTemplates(
 
   distributeRemainder(templateContexts, availBudget);
 
-  return { contexts: templateContexts, errors, orphanGoals };
+  return { contexts: templateContexts, errors: templateErrors, orphanGoals };
 }
 
 async function processTemplate(
@@ -305,14 +316,13 @@ async function processTemplate(
   categoryTemplates: Record<CategoryEntity['id'], Template[]>,
   categories: CategoryEntity[] = [],
 ): Promise<TemplateNotification> {
-  const { contexts, errors, orphanGoals } = await computeTemplates(
-    month,
-    force,
-    categoryTemplates,
-    categories,
-  );
+  const {
+    contexts,
+    errors: templateErrors,
+    orphanGoals,
+  } = await computeTemplates(month, force, categoryTemplates, categories);
 
-  if (contexts.length === 0 && errors.length === 0) {
+  if (contexts.length === 0 && templateErrors.length === 0) {
     if (orphanGoals.length > 0) {
       await setGoals(month, orphanGoals);
     }
@@ -321,11 +331,11 @@ async function processTemplate(
       message: 'templates-up-to-date',
     };
   }
-  if (errors.length > 0) {
+  if (templateErrors.length > 0) {
     return {
       sticky: true,
       message: 'template-errors',
-      pre: errors.join(`\n\n`),
+      pre: templateErrors.join(`\n\n`),
     };
   }
 

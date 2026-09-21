@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import { aqlQuery } from '#server/aql';
 import { conditionsToAQL } from '#server/transactions/transaction-rules';
 import { q } from '#shared/query';
@@ -5,6 +7,10 @@ import type { RuleConditionEntity, TransactionEntity } from '#types/models';
 
 import { getAccountRestrictionMode } from './forecast-accounts';
 import type { AccountWithComputedBalance } from './forecast-accounts';
+
+const errors = errorFileFor(
+  'loot-core/src/server/forecast/forecast-filters.ts',
+);
 
 type PayeeForFiltering = {
   id: string;
@@ -254,7 +260,10 @@ function evaluateClause(actualValue: unknown, clause: unknown): boolean {
 
           try {
             return new RegExp(expectedValue).test(normalizedActualValue);
-          } catch {
+          } catch (e) {
+            // A user-written pattern that is not a valid regex simply
+            // matches nothing.
+            errors.expected('compiling a filter regex', e);
             return false;
           }
         default:

@@ -3,10 +3,15 @@ import * as monthUtils from '@actual-app/core/shared/months';
 import { q } from '@actual-app/core/shared/query';
 import type { RuleConditionEntity } from '@actual-app/core/types/models';
 import type { SyncedPrefs } from '@actual-app/core/types/prefs';
+import { errorFileFor, tryOrAsync } from '@actual-app/error-file';
 import * as d from 'date-fns';
 
 import type { useSpreadsheet } from '#hooks/useSpreadsheet';
 import { aqlQuery } from '#queries/aqlQuery';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/spreadsheets/calendar-spreadsheet.ts',
+);
 
 export type CalendarDataType = {
   date: Date;
@@ -34,20 +39,20 @@ export function calendarSpreadsheet(
       }[];
     }) => void,
   ) => {
-    let filters: unknown[];
-
-    try {
-      const { filters: filtersLocal } = await send(
-        'make-filters-from-conditions',
-        {
-          conditions: conditions.filter(cond => !cond.customName),
-        },
-      );
-      filters = filtersLocal;
-    } catch (error) {
-      console.error('Failed to make filters from conditions:', error);
-      filters = [];
-    }
+    const filters: unknown[] = await tryOrAsync(
+      errors,
+      'building the calendar transaction filters',
+      async () => {
+        const { filters: filtersLocal } = await send(
+          'make-filters-from-conditions',
+          {
+            conditions: conditions.filter(cond => !cond.customName),
+          },
+        );
+        return filtersLocal;
+      },
+      [],
+    );
     const conditionsOpKey = conditionsOp === 'or' ? '$or' : '$and';
 
     let startDay: Date;
@@ -58,7 +63,7 @@ export function calendarSpreadsheet(
         new Date(),
       );
     } catch (error) {
-      console.error('Failed to parse start date:', error);
+      errors.caught('parsing the calendar start date', error);
       throw new Error('Invalid start date format');
     }
 
@@ -70,7 +75,7 @@ export function calendarSpreadsheet(
         new Date(),
       );
     } catch (error) {
-      console.error('Failed to parse end date:', error);
+      errors.caught('parsing the calendar end date', error);
       throw new Error('Invalid end date format');
     }
 
@@ -88,29 +93,29 @@ export function calendarSpreadsheet(
         .groupBy(['date'])
         .select(['date', { amount: { $sum: '$amount' } }]);
 
-    let expenseData;
-    try {
-      expenseData = await aqlQuery(
-        makeRootQuery().filter({
-          $and: { amount: { $lt: 0 } },
-        }),
-      );
-    } catch (error) {
-      console.error('Failed to fetch expense data:', error);
-      expenseData = { data: [] };
-    }
+    const expenseData = await tryOrAsync(
+      errors,
+      'querying the calendar expense totals',
+      () =>
+        aqlQuery(
+          makeRootQuery().filter({
+            $and: { amount: { $lt: 0 } },
+          }),
+        ),
+      { data: [], dependencies: [] },
+    );
 
-    let incomeData;
-    try {
-      incomeData = await aqlQuery(
-        makeRootQuery().filter({
-          $and: { amount: { $gt: 0 } },
-        }),
-      );
-    } catch (error) {
-      console.error('Failed to fetch income data:', error);
-      incomeData = { data: [] };
-    }
+    const incomeData = await tryOrAsync(
+      errors,
+      'querying the calendar income totals',
+      () =>
+        aqlQuery(
+          makeRootQuery().filter({
+            $and: { amount: { $gt: 0 } },
+          }),
+        ),
+      { data: [], dependencies: [] },
+    );
 
     const getOneDatePerMonth = (start: Date, end: Date) => {
       const months = [];

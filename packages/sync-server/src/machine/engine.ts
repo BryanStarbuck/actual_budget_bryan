@@ -41,7 +41,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { errorFileFor } from '@actual-app/error-file';
+
 import { MachineError } from './envelope.js';
+
+const errors = errorFileFor('sync-server/src/machine/engine.ts');
 
 /**
  * The slice of `@actual-app/api` this plane uses.
@@ -173,6 +177,7 @@ async function start(env: NodeJS.ProcessEnv): Promise<EngineLib> {
     fs.mkdirSync(dataDir, { recursive: true });
     lib = await api.init({ dataDir });
   } catch (err) {
+    errors.caught('starting the budget engine', err);
     status = 'failed';
     failure = {
       error: `The budget engine failed to start (${(err as Error).message}).`,
@@ -221,6 +226,9 @@ async function loadApi(): Promise<EngineApi | ApiLoadFailure> {
       code === 'ERR_MODULE_NOT_FOUND' ||
       code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
     ) {
+      // A deployment without the engine is a supported state, not a fault; the
+      // hint below carries the remediation.
+      errors.expected('loading @actual-app/api', err);
       const unbuilt = message.includes('/dist/');
       return {
         error: unbuilt
@@ -234,9 +242,10 @@ async function loadApi(): Promise<EngineApi | ApiLoadFailure> {
 
     // Anything else is a real load error — a throw at module scope, a native
     // binding mismatch — and its message is the only useful thing we have.
+    errors.caught('loading @actual-app/api', err);
     return {
       error: `@actual-app/api failed to load (${message}).`,
-      hint: 'read ~/T/_actual_budget/server.log, then rebuild the workspace',
+      hint: 'read ~/T/actual_budget/error.err, then rebuild the workspace',
     };
   }
 }
@@ -259,7 +268,8 @@ async function openConfiguredBudget(env: NodeJS.ProcessEnv): Promise<void> {
   let budgets: Array<{ id?: string; cloudFileId?: string; name: string }>;
   try {
     budgets = await api.getBudgets();
-  } catch {
+  } catch (err) {
+    errors.caught('listing the budgets known to the engine', err);
     openBudget = null;
     return;
   }
@@ -285,7 +295,8 @@ async function openConfiguredBudget(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await api.loadBudget(id);
     openBudget = { id, name: chosen.name };
-  } catch {
+  } catch (err) {
+    errors.caught('opening the configured budget', err, { budgetId: id });
     openBudget = null;
   }
 }
@@ -302,7 +313,8 @@ export async function knownBudgets(): Promise<
     return budgets
       .map(b => ({ id: b.id ?? b.cloudFileId ?? '', name: b.name }))
       .filter(b => b.id !== '');
-  } catch {
+  } catch (err) {
+    errors.caught('listing the known budgets', err);
     return [];
   }
 }
@@ -335,8 +347,9 @@ export async function shutdownEngine(): Promise<void> {
   if (api !== null && lib !== null) {
     try {
       await api.shutdown();
-    } catch {
+    } catch (err) {
       // A shutdown that fails on the way out must not stop the process exiting.
+      errors.caught('shutting down the budget engine', err);
     }
   }
   resetEngineForTests();

@@ -1,3 +1,5 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as asyncStorage from '#platform/server/asyncStorage';
 import { aqlQuery } from '#server/aql';
 import { getCurrency } from '#shared/currencies';
@@ -6,6 +8,10 @@ import type { UserPreferences } from '#shared/formulas/customFunctions';
 import { q } from '#shared/query';
 import { getNumberFormat } from '#shared/util';
 import type { NumberFormats } from '#shared/util';
+
+const errors = errorFileFor(
+  'loot-core/src/server/formulas/customFunctionsPreferences.ts',
+);
 
 type FormulaPreferencesOptions = {
   selectedLocale?: string;
@@ -172,7 +178,8 @@ export async function loadUserPreferencesForFormulas({
         ? spaceEnabledValue === 'true'
         : false,
     };
-  } catch {
+  } catch (e) {
+    errors.caught('loading the formula preferences', e);
     const locale =
       normalizeLocale(selectedLocale) ??
       normalizeLocale(browserLocale) ??

@@ -9,6 +9,7 @@ import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
 import * as asyncStorage from '@actual-app/core/platform/server/asyncStorage';
 import type { OpenIdConfig } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { closeBudget } from '#budgetfiles/budgetfilesSlice';
 import { Error } from '#components/alerts';
@@ -19,6 +20,10 @@ import { popModal } from '#modals/modalsSlice';
 import type { Modal as ModalType } from '#modals/modalsSlice';
 import { useDispatch } from '#redux';
 import { getOpenIdErrors } from '#util/error';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/OpenIDEnableModal.tsx',
+);
 
 type OpenIDEnableModalProps = Extract<
   ModalType,
@@ -44,7 +49,7 @@ export function OpenIDEnableModal({
           await asyncStorage.removeItem('user-token');
           await dispatch(closeBudget());
         } catch (e) {
-          console.error('Failed to cleanup after OpenID enable:', e);
+          errors.caught('cleaning up after enabling OpenID', e);
           setError(
             t(
               'OpenID was enabled but cleanup failed. Please refresh the application.',
@@ -55,7 +60,7 @@ export function OpenIDEnableModal({
         setError(getOpenIdErrors(error));
       }
     } catch (e) {
-      console.error('Failed to enable OpenID:', e);
+      errors.caught('enabling OpenID', e);
       setError(t('Failed to enable OpenID. Please try again.'));
     }
   }

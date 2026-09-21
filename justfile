@@ -18,6 +18,9 @@ set shell := ["bash", "-uc"]
 
 root := justfile_directory()
 state := env_var('HOME') / "T/_actual_budget"
+# Budget data (server-files, user-files, machine-engine) lives OUTSIDE the repo, never under packages/.
+# The sync server otherwise defaults ACTUAL_DATA_DIR to its cwd, which is inside this open-source tree.
+data := state / "data"
 web_port := "3001"
 server_port := "5006"
 
@@ -157,7 +160,7 @@ dev: setup
 #
 # Sync server, foreground (optional — multi-device sync / server-backed files).
 server: setup
-    cd "{{root}}" && yarn start:server
+    mkdir -p "{{data}}" && cd "{{root}}" && ACTUAL_DATA_DIR="{{data}}" yarn start:server
 
 # Sync server, DETACHED — the form `abx` brings up (pm/cli.mdx §3.1).
 #
@@ -185,7 +188,8 @@ server-bg: setup
       exit 1
     fi
     cd "{{root}}"
-    nohup yarn start:server >> "{{state}}/server.log" 2>&1 &
+    mkdir -p "{{data}}"
+    ACTUAL_DATA_DIR="{{data}}" nohup yarn start:server >> "{{state}}/server.log" 2>&1 &
     echo $! > "{{state}}/server.pid"
     echo "starting sync server (pid $(cat "{{state}}/server.pid")) — log: {{state}}/server.log"
     for _ in $(seq 1 120); do
@@ -217,7 +221,7 @@ stop-server:
 
 # Web app + sync server together, foreground (yarn's own combined dev script).
 run-with-server: setup
-    cd "{{root}}" && yarn start:server-dev
+    mkdir -p "{{data}}" && cd "{{root}}" && ACTUAL_DATA_DIR="{{data}}" yarn start:server-dev
 
 # Kill OUR dev tree (recorded pid and its descendants), then anything still holding :3001.
 stop:
@@ -287,6 +291,15 @@ typecheck: setup
 
 lint: setup
     cd "{{root}}" && yarn lint
+
+# Every in-scope source file must be compliant or net-covered, and every runtime's global net
+# (pm/error_err.mdx §7) must be installed. Writes the per-file report to
+# ~/T/actual_budget/error_file_coverage.json — outside the repo — and fails on any violating or
+# unwired file. `yarn lint` already runs the rule itself; this is the whole-tree tally.
+#
+# Error-file coverage tally (pm/error_err.mdx §12.2) — fails on any violating or unwired file.
+check-errors: setup
+    cd "{{root}}" && node scripts/error-file-coverage.mjs
 
 fix: setup
     cd "{{root}}" && yarn lint:fix

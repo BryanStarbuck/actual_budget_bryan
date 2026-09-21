@@ -15,6 +15,7 @@ import type {
   RuleConditionEntity,
   TimeFrame,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 import { HyperFormula } from 'hyperformula';
 
 import {
@@ -29,6 +30,8 @@ import { bootstrapHyperFormula } from '#util/bootstrapHyperFormula';
 
 import { useGlobalPref } from './useGlobalPref';
 import { useLocale } from './useLocale';
+
+const errors = errorFileFor('desktop-client/src/hooks/useFormulaExecution.ts');
 
 bootstrapHyperFormula();
 
@@ -62,6 +65,15 @@ function createFormulaQueryContext(): Required<FormulaQueryContext> {
     budgetQueryPrefetch: new Map(),
     budgetQueryErrors: new Map(),
   };
+}
+
+/** A failure raised by the user's own formula text (a cell error or a bad argument), not by us. */
+function isFormulaInputError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.message.startsWith('Formula error:') ||
+      err.message.startsWith('Invalid BUDGET_QUERY dimension:'))
+  );
 }
 
 function isHyperFormulaError(
@@ -196,7 +208,7 @@ export function useFormulaExecution(
             }),
           );
         } catch (err) {
-          console.error('Error loading formula preferences:', err);
+          errors.caught('loading the formula user preferences', err);
         }
 
         const formulaQueryContext = createFormulaQueryContext();
@@ -239,7 +251,11 @@ export function useFormulaExecution(
         setError(null);
       } catch (err) {
         if (cancelled) return;
-        console.error('Formula execution error:', err);
+        if (isFormulaInputError(err)) {
+          errors.expected('executing a formula', err);
+        } else {
+          errors.caught('executing a formula', err);
+        }
         setError(err instanceof Error ? err.message : 'Unknown error');
         setResult(null);
       } finally {
@@ -353,7 +369,9 @@ async function fetchAccountBalance(accountId: string): Promise<number> {
     const { data } = await send('query', balanceQuery.serialize());
     return integerToAmount(data || 0, 2);
   } catch (err) {
-    console.error('Error fetching account balance:', err);
+    errors.caught('fetching an account balance for a formula', err, {
+      accountId,
+    });
     return 0;
   }
 }
@@ -376,7 +394,11 @@ async function prefetchBudgetQueries(
       );
       formulaQueryContext.budgetQueryErrors.delete(key);
     } catch (err) {
-      console.error('Error evaluating BUDGET_QUERY', err);
+      if (isFormulaInputError(err)) {
+        errors.expected('evaluating a BUDGET_QUERY formula function', err);
+      } else {
+        errors.caught('evaluating a BUDGET_QUERY formula function', err);
+      }
       formulaQueryContext.budgetQueryPrefetch.delete(key);
       formulaQueryContext.budgetQueryErrors.set(
         key,
@@ -431,7 +453,7 @@ async function fetchQuerySum(config: QueryConfig): Promise<number> {
     const { data } = await send('query', summedQuery.serialize());
     return data || 0;
   } catch (err) {
-    console.error('Error fetching query sum:', err);
+    errors.caught('fetching a formula query sum', err);
     return 0;
   }
 }
@@ -443,7 +465,7 @@ async function fetchQueryCount(config: QueryConfig): Promise<number> {
     const { data } = await send('query', countQuery.serialize());
     return data || 0;
   } catch (err) {
-    console.error('Error fetching query count:', err);
+    errors.caught('fetching a formula query count', err);
     return 0;
   }
 }
@@ -512,7 +534,10 @@ async function getCategoriesFromConditions(
         try {
           return new RegExp(cond.value as string, 'i').test(textValue);
         } catch (e) {
-          console.warn('Invalid regexp in matches condition', e);
+          errors.expected(
+            'compiling a regular expression from a category condition',
+            e,
+          );
           return false;
         }
       }

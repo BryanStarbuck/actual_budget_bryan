@@ -1,0 +1,26 @@
+{
+  "name": "@actual-app/error-file",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The repo-wide error file (~/T/actual_budget/error.err) — see pm/error_err.mdx",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./browser": "./src/browser.ts",
+    "./ingest": "./src/ingest.ts",
+    "./vite-plugin": "./src/vite-plugin.ts"
+  },
+  "scripts": {
+    "test": "vitest --run",
+    "typecheck": "tsgo -b"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@typescript/native-preview": "beta",
+    "vitest": "^5.0.0"
+  }
+}

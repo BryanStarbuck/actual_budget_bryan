@@ -9,7 +9,7 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../api" }],
+  "references": [{ "path": "../api" }, { "path": "../error-file" }],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "coverage"]
 }

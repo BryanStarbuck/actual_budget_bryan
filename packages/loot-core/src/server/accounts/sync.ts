@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import * as dateFns from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -37,6 +38,8 @@ import type {
 
 import { getStartingBalancePayee } from './payees';
 import { title } from './title';
+
+const errors = errorFileFor('loot-core/src/server/accounts/sync.ts');
 
 function BankSyncError(type: string, code: string, details?: object) {
   return { type: 'BankSyncError', category: type, code, details };
@@ -212,7 +215,7 @@ async function downloadSimpleFinTransactions(
       Array.isArray(acctId) ? 300000 : 60000,
     );
   } catch (error) {
-    logger.error('Suspected timeout during bank sync:', error);
+    errors.caught('pulling the SimpleFin transactions', error);
     throw BankSyncError('TIMED_OUT', 'TIMED_OUT');
   }
 
@@ -1329,13 +1332,18 @@ export async function simpleFinBatchSync(
           accountId: account.id,
           res,
         }))
-        .catch(err => ({
-          accountId: account.id,
-          res: {
-            error_type: err?.category || 'INTERNAL_ERROR',
-            error_code: err?.code || 'INTERNAL_ERROR',
-          },
-        })),
+        .catch(err => {
+          errors.caught('processing a SimpleFin bank sync download', err, {
+            accountId: account.id,
+          });
+          return {
+            accountId: account.id,
+            res: {
+              error_type: err?.category || 'INTERNAL_ERROR',
+              error_code: err?.code || 'INTERNAL_ERROR',
+            },
+          };
+        }),
     );
   }
 

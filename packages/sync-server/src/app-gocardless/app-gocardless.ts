@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 import type { Request } from 'express';
 
@@ -23,6 +24,8 @@ import type {
 import { goCardlessService } from './services/gocardless-service';
 import { handleError } from './util/handle-error';
 
+const errors = errorFileFor('sync-server/src/app-gocardless/app-gocardless.ts');
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -33,7 +36,8 @@ function validateOrigin(origin: string | undefined) {
   let url;
   try {
     url = new URL(origin ?? '');
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the Origin header', e);
     throw new Error('Invalid Origin header');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -146,6 +150,7 @@ app.post(
       });
     } catch (error) {
       if (error instanceof RequisitionNotLinked) {
+        errors.expected('fetching the GoCardless requisition accounts', error);
         res.send({
           status: 'ok',
           requisitionStatus: isRecord(error.details)
@@ -293,9 +298,6 @@ app.post(
           )
         : {};
 
-      const errorMessage =
-        error instanceof Error && error.message ? error.message : String(error);
-
       const sendErrorResponse = (data: Record<string, unknown>) =>
         res.send({
           status: 'ok',
@@ -305,6 +307,7 @@ app.post(
       switch (true) {
         case error instanceof RequisitionNotLinked:
         case error instanceof EndUserAgreementExpiredError:
+          errors.expected('fetching GoCardless transactions', error);
           sendErrorResponse({
             error_type: 'ITEM_ERROR',
             error_code: 'ITEM_LOGIN_REQUIRED',
@@ -314,6 +317,7 @@ app.post(
           });
           break;
         case error instanceof AccountNotLinkedToRequisition:
+          errors.expected('fetching GoCardless transactions', error);
           sendErrorResponse({
             error_type: 'INVALID_INPUT',
             error_code: 'INVALID_ACCESS_TOKEN',
@@ -322,6 +326,10 @@ app.post(
           });
           break;
         case error instanceof RateLimitError:
+          errors.warn('fetching GoCardless transactions', error, {
+            requisitionId,
+            accountId,
+          });
           sendErrorResponse({
             error_type: 'RATE_LIMIT_EXCEEDED',
             error_code: 'NORDIGEN_ERROR',
@@ -330,14 +338,20 @@ app.post(
           });
           break;
         case error instanceof GenericGoCardlessError:
-          console.log('Something went wrong', errorMessage);
+          errors.caught('fetching GoCardless transactions', error, {
+            requisitionId,
+            accountId,
+          });
           sendErrorResponse({
             error_type: 'SYNC_ERROR',
             error_code: 'NORDIGEN_ERROR',
           });
           break;
         default:
-          console.log('Something went wrong', errorMessage);
+          errors.caught('fetching GoCardless transactions', error, {
+            requisitionId,
+            accountId,
+          });
           sendErrorResponse({
             error_type: 'UNKNOWN',
             error_code: 'UNKNOWN',

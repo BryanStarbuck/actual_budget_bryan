@@ -1,10 +1,10 @@
 // @ts-strict-ignore
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
 import * as asyncStorage from '#platform/server/asyncStorage';
 import { fetch } from '#platform/server/fetch';
 import * as fs from '#platform/server/fs';
-import { logger } from '#platform/server/log';
 import * as memory from '#platform/server/memory';
 import * as sqlite from '#platform/server/sqlite';
 import * as monthUtils from '#shared/months';
@@ -26,6 +26,8 @@ import {
   safeZip,
   UnsafeZipError,
 } from './util/zip';
+
+const errors = errorFileFor('loot-core/src/server/cloud-storage.ts');
 
 const UPLOAD_FREQUENCY_IN_DAYS = 7;
 
@@ -59,8 +61,9 @@ async function checkHTTPStatus(res) {
       if (getServerErrorReason(error) === 'token-expired') {
         await asyncStorage.removeItem('user-token');
       }
-    } catch {
+    } catch (e) {
       // Preserve the original HTTP error when the response is not JSON.
+      errors.expected('parsing the unauthorized response body', e);
     }
   }
 
@@ -88,7 +91,7 @@ export async function checkKey(): Promise<{
       fileId: cloudFileId,
     });
   } catch (e) {
-    logger.log(e);
+    errors.caught('checking the encryption key with the server', e);
     return { valid: false, error: { reason: 'network' } };
   }
 
@@ -113,12 +116,18 @@ export async function resetSyncState(newKeyState) {
     });
   } catch (e) {
     if (e instanceof PostError) {
+      if (e.reason === 'unauthorized') {
+        errors.expected('resetting the sync state on the server', e);
+      } else {
+        errors.caught('resetting the sync state on the server', e);
+      }
       return {
         error: {
           reason: e.reason === 'unauthorized' ? 'unauthorized' : 'network',
         },
       };
     }
+    errors.caught('resetting the sync state on the server', e);
     return { error: { reason: 'internal' } };
   }
 
@@ -132,6 +141,7 @@ export async function resetSyncState(newKeyState) {
         testContent: newKeyState.testContent,
       });
     } catch (e) {
+      errors.caught('creating the encryption key on the server', e);
       if (e instanceof PostError) {
         return { error: { reason: 'network' } };
       }
@@ -215,8 +225,11 @@ export async function importBuffer(fileData, buffer) {
     entries = safeUnzip(buffer);
   } catch (e) {
     if (e instanceof UnsafeZipError) {
+      // A refused oversize archive is an answer, not a fault (R7).
+      errors.expected('unzipping the downloaded budget file', e);
       throw FileDownloadError('zip-too-large', e.meta);
     }
+    errors.caught('unzipping the downloaded budget file', e);
     throw FileDownloadError('not-zip-file');
   }
   const entryNames = Object.keys(entries);
@@ -249,7 +262,8 @@ export async function importBuffer(fileData, buffer) {
   let meta;
   try {
     meta = JSON.parse(metaContent.toString('utf8'));
-  } catch {
+  } catch (e) {
+    errors.caught('parsing the downloaded metadata.json', e);
     throw FileDownloadError('invalid-meta-file');
   }
 
@@ -317,9 +331,14 @@ export async function upload() {
     try {
       encrypted = await encryption.encrypt(zipContent, encryptKeyId);
     } catch (e) {
-      throw FileUploadError('encrypt-failure', {
-        isMissingKey: e.message === 'missing-key',
-      });
+      const isMissingKey = e.message === 'missing-key';
+      if (isMissingKey) {
+        // The key has not been entered yet; the UI asks for it.
+        errors.expected('encrypting the budget file for upload', e);
+      } else {
+        errors.caught('encrypting the budget file for upload', e);
+      }
+      throw FileUploadError('encrypt-failure', { isMissingKey });
     }
     uploadContent = encrypted.value;
     uploadMeta = encrypted.meta;
@@ -350,7 +369,12 @@ export async function upload() {
       body: uploadContent,
     });
   } catch (err) {
-    logger.log('Upload failure', err);
+    if (err instanceof PostError && err.reason === 'unauthorized') {
+      // Signed out: an answer, not a fault (R7).
+      errors.expected('uploading the budget file', err);
+    } else {
+      errors.caught('uploading the budget file', err);
+    }
 
     if (err instanceof PostError) {
       throw FileUploadError(
@@ -396,9 +420,7 @@ export async function possiblyUpload() {
   }
 
   // Don't block on uploading
-  upload().catch(() => {
-    // Ignore errors
-  });
+  reportRejection(errors, 'uploading the budget on its schedule', upload());
 }
 
 export async function removeFile(fileId) {
@@ -424,12 +446,14 @@ export async function listRemoteFiles(): Promise<RemoteFile[]> {
       },
     });
   } catch (e) {
-    logger.log('Unexpected error fetching file list from server', e);
+    errors.caught('listing the remote budget files', e);
     return null;
   }
 
   if (res.status === 'error') {
-    logger.log('Error fetching file list from server', res);
+    errors.warn('listing the remote budget files', undefined, {
+      reason: getServerErrorReason(res),
+    });
     return null;
   }
 
@@ -459,7 +483,7 @@ export async function download(cloudFileId) {
       return res.buffer();
     })
     .catch(err => {
-      logger.log('Download failure', err);
+      errors.caught('downloading the budget file', err);
       throw FileDownloadError('download-failure');
     });
 
@@ -469,7 +493,9 @@ export async function download(cloudFileId) {
       'X-ACTUAL-FILE-ID': cloudFileId,
     },
   }).catch(err => {
-    logger.log('Error fetching file info', err);
+    errors.caught('fetching the remote file info', err, {
+      fileId: cloudFileId,
+    });
     throw FileDownloadError('internal', { fileId: cloudFileId });
   });
 
@@ -479,10 +505,11 @@ export async function download(cloudFileId) {
   ]);
 
   if (userFileInfoRes.status !== 'ok') {
-    logger.log(
-      'Could not download file from the server. Are you sure you have the right file ID?',
-      userFileInfoRes,
-    );
+    // The server has no such file: the file ID is probably wrong.
+    errors.warn('fetching the remote file info', undefined, {
+      fileId: cloudFileId,
+      reason: getServerErrorReason(userFileInfoRes),
+    });
     throw FileDownloadError('internal', { fileId: cloudFileId });
   }
 
@@ -496,9 +523,14 @@ export async function download(cloudFileId) {
     try {
       buffer = await encryption.decrypt(buffer, fileData.encryptMeta);
     } catch (e) {
-      throw FileDownloadError('decrypt-failure', {
-        isMissingKey: e.message === 'missing-key',
-      });
+      const isMissingKey = e.message === 'missing-key';
+      if (isMissingKey) {
+        // The key has not been entered yet; the UI asks for it.
+        errors.expected('decrypting the downloaded budget file', e);
+      } else {
+        errors.caught('decrypting the downloaded budget file', e);
+      }
+      throw FileDownloadError('decrypt-failure', { isMissingKey });
     }
   }
 

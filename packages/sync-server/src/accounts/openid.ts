@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { custom, generators, Issuer } from 'openid-client';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -15,6 +16,8 @@ import {
 import { TOKEN_EXPIRATION_NEVER } from '#util/validate-user';
 
 import { checkPassword } from './password';
+
+const errors = errorFileFor('sync-server/src/accounts/openid.ts');
 
 export type ConfigParameter = {
   issuer?: string;
@@ -52,7 +55,7 @@ export async function bootstrapOpenId(configParameter: ConfigParameter) {
 
     await setupOpenIdClient(configParameter);
   } catch (err) {
-    console.error('Error setting up OpenID client:', err);
+    errors.caught('setting up the OpenID client', err);
     return { error: 'configuration-error' };
   }
 
@@ -67,7 +70,7 @@ export async function bootstrapOpenId(configParameter: ConfigParameter) {
       );
     });
   } catch (err) {
-    console.error('Error updating auth table:', err);
+    errors.caught('saving the OpenID configuration to the auth table', err);
     return { error: 'database-error' };
   }
 
@@ -136,7 +139,7 @@ export async function loginWithOpenIdSetup(
   try {
     config = JSON.parse(config['extra_data']);
   } catch (err) {
-    console.error('Error parsing OpenID configuration:', err);
+    errors.caught('parsing the stored OpenID configuration', err);
     return { error: 'openid-setup-failed' };
   }
 
@@ -144,7 +147,7 @@ export async function loginWithOpenIdSetup(
   try {
     client = await setupOpenIdClient(config);
   } catch (err) {
-    console.error('Error setting up OpenID client:', err);
+    errors.caught('setting up the OpenID client', err);
     return { error: 'openid-setup-failed' };
   }
 
@@ -193,14 +196,14 @@ export async function loginWithOpenIdFinalize(body) {
   try {
     configFromDb = JSON.parse(configFromDb['extra_data']);
   } catch (err) {
-    console.error('Error parsing OpenID configuration:', err);
+    errors.caught('parsing the stored OpenID configuration', err);
     return { error: 'openid-setup-failed' };
   }
   let client;
   try {
     client = await setupOpenIdClient(configFromDb);
   } catch (err) {
-    console.error('Error setting up OpenID client:', err);
+    errors.caught('setting up the OpenID client', err);
     return { error: 'openid-setup-failed' };
   }
 
@@ -304,8 +307,10 @@ export async function loginWithOpenIdFinalize(body) {
       });
     } catch (error) {
       if (error.message === 'user-already-exists') {
+        errors.expected('creating the OpenID user', error);
         return { error: 'user-already-exists' };
       } else if (error.message === 'openid-grant-failed') {
+        errors.expected('looking up the OpenID user', error);
         return { error: 'openid-grant-failed' };
       } else {
         throw error; // Re-throw other unexpected errors
@@ -335,7 +340,7 @@ export async function loginWithOpenIdFinalize(body) {
 
     return { url: `${return_url}/openid-cb?token=${token}` };
   } catch (err) {
-    console.error('OpenID grant failed:', err);
+    errors.caught('finalizing the OpenID login', err);
     return { error: 'openid-grant-failed' };
   }
 }
@@ -350,7 +355,7 @@ export function getServerHostname() {
       const openIdConfig = JSON.parse(auth.extra_data);
       return openIdConfig.server_hostname;
     } catch (error) {
-      console.error('Error parsing OpenID configuration:', error);
+      errors.caught('parsing the stored OpenID configuration', error);
     }
   }
   return null;
@@ -375,7 +380,8 @@ export function isValidRedirectUrl(url: string | undefined): url is string {
     } else {
       return false;
     }
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the OpenID redirect URL', e);
     return false;
   }
 }

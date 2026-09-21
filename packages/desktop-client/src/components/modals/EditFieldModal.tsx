@@ -13,6 +13,7 @@ import {
   amountToInteger,
   currencyToInteger,
 } from '@actual-app/core/shared/util';
+import { errorFileFor } from '@actual-app/error-file';
 import { format as formatDate, parse as parseDate, parseISO } from 'date-fns';
 
 import { NoteInsertHashButton } from '#components/autocomplete/NoteInsertHashButton';
@@ -24,6 +25,10 @@ import { InputField } from '#components/mobile/MobileForms';
 import { DateSelect } from '#components/select/DateSelect';
 import { useDateFormat } from '#hooks/useDateFormat';
 import type { Modal as ModalType } from '#modals/modalsSlice';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/EditFieldModal.tsx',
+);
 
 const itemStyle: CSSProperties = {
   fontSize: 17,
@@ -223,7 +228,9 @@ export function EditFieldModal({
                   if (noteFindReplace.useRegex) {
                     try {
                       new RegExp(noteFindReplace.find, 'g');
-                    } catch {
+                    } catch (e) {
+                      // A bad user-typed pattern is an answer, not a fault (R7).
+                      errors.expected('validating a find-and-replace regex', e);
                       alert(t('Invalid regular expression'));
                       return;
                     }

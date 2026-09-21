@@ -11,6 +11,7 @@ import { getNormalisedString } from '@actual-app/core/shared/normalisation';
 import { q } from '@actual-app/core/shared/query';
 import { getScheduledAmount } from '@actual-app/core/shared/schedules';
 import type { ScheduleEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { Search } from '#components/common/Search';
 import { MobilePageHeader, Page } from '#components/Page';
@@ -26,6 +27,10 @@ import { useDispatch } from '#redux';
 
 import { AddScheduleButton } from './AddScheduleButton';
 import { SchedulesList } from './SchedulesList';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/mobile/schedules/MobileSchedulesPage.tsx',
+);
 
 export function MobileSchedulesPage() {
   const { t } = useTranslation();
@@ -102,7 +107,7 @@ export function MobileSchedulesPage() {
           message: t('Schedule deleted successfully'),
         });
       } catch (error) {
-        console.error('Failed to delete schedule:', error);
+        errors.caught('deleting a schedule', error, { id: schedule.id });
         dispatch(
           addNotification({
             notification: {

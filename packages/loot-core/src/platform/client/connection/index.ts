@@ -1,10 +1,15 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
 import * as undo from '#platform/client/undo';
-import { captureBreadcrumb, captureException } from '#platform/exceptions';
+import { captureBreadcrumb } from '#platform/exceptions';
 
 import type * as T from './index-types';
+
+const errors = errorFileFor(
+  'loot-core/src/platform/client/connection/index.ts',
+);
 
 const replyHandlers = new Map();
 const listeners = new Map();
@@ -116,7 +121,9 @@ function connectWorker(worker, onOpen, onError) {
       });
       onError(msg);
     } else if (msg.type === 'capture-exception') {
-      captureException(
+      // pm/error_err.mdx §7 N8: a fault the worker forwarded to the UI.
+      errors.caught(
+        'receiving an exception from the backend worker',
         msg.stack
           ? new ReconstructedError(
               msg.message,

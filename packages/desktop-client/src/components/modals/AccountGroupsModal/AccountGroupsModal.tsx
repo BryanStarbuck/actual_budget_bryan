@@ -9,6 +9,7 @@ import type {
   AccountEntity,
   AccountGroupEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 
 import {
   useCreateAccountGroupMutation,
@@ -30,6 +31,10 @@ import { useAccountGroups } from '#hooks/useAccountGroups';
 
 import { AccountGroupRow } from './AccountGroupRow';
 import { SelectedIndicator } from './SelectedIndicator';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/AccountGroupsModal/AccountGroupsModal.tsx',
+);
 
 type AccountGroupsModalProps = {
   accountId: AccountEntity['id'];
@@ -135,8 +140,9 @@ export function AccountGroupsModal({ accountId }: AccountGroupsModalProps) {
                           name: rawValue.trim(),
                         });
                         onSelect(newId);
-                      } catch {
+                      } catch (e) {
                         // Creation failures surface as a notification
+                        errors.expected('creating an account group', e);
                       }
                     } else if (groupId) {
                       onSelect(groupId);

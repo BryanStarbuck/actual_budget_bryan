@@ -29,12 +29,15 @@ import {
   readMachineMetadata,
   resolveMachineKey,
 } from '../credentials.js';
-import { Exit } from '../exit.js';
+import { CliError, Exit } from '../exit.js';
 import { stateDir } from '../logger.js';
 import { withSpinner } from '../progress.js';
 import { out, render } from '../render.js';
 import type { Row } from '../render.js';
+import { errorFileFor } from '../vendor/error-file/index.ts';
 import type { Context, Verb } from '../verb.js';
+
+const errors = errorFileFor('cli/code/src/commands/orientation.ts');
 
 const WEB_URL = 'http://localhost:3001/';
 
@@ -70,6 +73,13 @@ async function machinePlaneStatus(ctx: Context): Promise<{
     });
     return { state: 'ok', detail: 'mounted, key accepted' };
   } catch (err) {
+    // Every CliError here becomes a status line, so it is an answer, not a
+    // fault (R7). Anything else is a real one.
+    if (err instanceof CliError) {
+      errors.expected('pinging the machine plane', err);
+    } else {
+      errors.caught('pinging the machine plane', err);
+    }
     const code = (err as { code?: number }).code;
     if (code === Exit.unauthorized) {
       // A green /health with a 401 from ping is the single most likely
@@ -126,6 +136,8 @@ export const orient: Verb = {
         keyLine = `  machine key  ${file}   ok   (${fingerprint(meta.api_key)})`;
       }
     } catch (err) {
+      // A refused credentials file is unusual, and printed (R7).
+      errors.warn('reading the machine key metadata', err);
       keyLine = `  machine key  ${file}   REFUSED: ${(err as Error).message}`;
     }
     lines.push(keyLine);
@@ -170,6 +182,7 @@ export const doctor: Verb = {
       fs.accessSync(dir, fs.constants.W_OK);
       writable = true;
     } catch (err) {
+      errors.caught('checking the state directory is writable', err);
       stateDetail = `${dir} — ${(err as Error).message}`;
     }
     checks.push({
@@ -192,6 +205,8 @@ export const doctor: Verb = {
           : `${file} — present but holds no machine key`;
       }
     } catch (err) {
+      // A refused credentials file is unusual, and printed (R7).
+      errors.warn('checking the credentials file', err);
       credentialsDetail = `${file} — ${(err as Error).message}`;
     }
     checks.push({

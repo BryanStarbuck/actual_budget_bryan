@@ -17,6 +17,7 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "plugins": [{ "name": "typescript-strict-plugin", "paths": ["."] }]
   },
+  "references": [{ "path": "../error-file" }],
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
 }

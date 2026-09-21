@@ -1,3 +1,4 @@
+import { errorFileFor } from '@actual-app/error-file';
 import express from 'express';
 
 import { handleError } from '#app-gocardless/util/handle-error';
@@ -7,6 +8,8 @@ import {
   validateSessionMiddleware,
 } from '#util/middlewares';
 import { assertUrlAllowed } from '#util/ssrf';
+
+const errors = errorFileFor('sync-server/src/app-simplefin/app-simplefin.js');
 
 const app = express();
 export { app as handlers };
@@ -53,8 +56,8 @@ app.post(
       try {
         accessKey = await claimAccessKey(claimUrl);
       } catch (e) {
-        console.log('Failed to claim the SimpleFIN setup token:');
-        serverDown(e, res);
+        errors.caught('claiming the SimpleFIN setup token', e);
+        serverDown(res);
         return;
       }
 
@@ -81,7 +84,8 @@ app.post(
         },
       });
     } catch (e) {
-      serverDown(e, res);
+      errors.caught('listing the SimpleFIN accounts', e);
+      serverDown(res);
       return;
     }
   }),
@@ -122,9 +126,12 @@ app.post(
       );
     } catch (e) {
       if (isForbidden(e.message)) {
+        // SimpleFIN refused the access key: an answer for the user, not a fault.
+        errors.expected('fetching the SimpleFIN transactions', e);
         invalidToken(res);
       } else {
-        serverDown(e, res);
+        errors.caught('fetching the SimpleFIN transactions', e);
+        serverDown(res);
       }
       return;
     }
@@ -295,8 +302,7 @@ function invalidToken(res) {
   });
 }
 
-function serverDown(e, res) {
-  console.log(e);
+function serverDown(res) {
   res.send({
     status: 'ok',
     data: {
@@ -338,7 +344,9 @@ function decodeClaimUrl(base64Token) {
   let url;
   try {
     url = new URL(decoded);
-  } catch {
+  } catch (e) {
+    // A setup token that does not decode to a URL is reported to the user as invalid.
+    errors.expected('decoding the SimpleFIN setup token', e);
     return null;
   }
 
@@ -477,7 +485,9 @@ async function getAccounts(
     results.errors = {};
     return results;
   } catch (e) {
-    console.log(`Error parsing JSON response: ${text}`);
-    throw e;
+    errors.rethrow('parsing the SimpleFIN accounts response', e, {
+      status: response.status,
+      bytes: text.length,
+    });
   }
 }

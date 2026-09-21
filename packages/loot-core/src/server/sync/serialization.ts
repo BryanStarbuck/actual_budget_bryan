@@ -1,3 +1,7 @@
+import { errorFileFor } from '@actual-app/error-file';
+
+const errors = errorFileFor('loot-core/src/server/sync/serialization.ts');
+
 // Sync message values travel as tagged strings — "0:" for null, "N:"
 // for numbers, "S:" for strings; newer app versions may introduce more
 // prefixes.
@@ -62,7 +66,9 @@ export function deserializeValueSafe(
 ): string | number | null | UnknownFormatValue {
   try {
     return deserializeValue(value);
-  } catch {
+  } catch (e) {
+    // A tag from a newer version: carried through opaquely and deferred
+    errors.expected('decoding a sync message value', e);
     return { kind: 'unknown-format', raw: value };
   }
 }

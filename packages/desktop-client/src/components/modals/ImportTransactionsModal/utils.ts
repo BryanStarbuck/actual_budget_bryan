@@ -1,6 +1,11 @@
 import { format as formatDate_ } from '@actual-app/core/shared/months';
 import { looselyParseAmount } from '@actual-app/core/shared/util';
+import { errorFileFor } from '@actual-app/error-file';
 import * as d from 'date-fns';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/ImportTransactionsModal/utils.ts',
+);
 
 export type DateFormat =
   | 'yyyy mm dd'
@@ -118,7 +123,10 @@ export function formatDate(
   }
   try {
     return formatDate_(date, format);
-  } catch {}
+  } catch (e) {
+    // An unparseable imported date is a normal preview outcome; the row shows a blank.
+    errors.expected('formatting an imported transaction date', e);
+  }
   return null;
 }
 

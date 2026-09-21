@@ -27,6 +27,7 @@ import {
 import { titleFirst } from '@actual-app/core/shared/util';
 import type { IntegerAmount } from '@actual-app/core/shared/util';
 import type { RuleConditionEntity } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 import {
   format as formatDate,
   isValid as isDateValid,
@@ -51,6 +52,10 @@ import { PayeeFilter } from './PayeeFilter';
 import { subfieldFromFilter } from './subfieldFromFilter';
 import { subfieldToOptions } from './subfieldToOptions';
 import { updateFilterReducer } from './updateFilterReducer';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/filters/FiltersMenu.tsx',
+);
 
 type FilterReducerState<T extends RuleConditionEntity> = Pick<
   T,
@@ -463,7 +468,9 @@ function ConfigureField<T extends RuleConditionEntity>({
                       : parsed;
                 }
               }
-            } catch {
+            } catch (e) {
+              // An unparseable typed amount keeps the previous value (R7).
+              errors.expected('parsing a typed filter amount', e);
               submitValue = value;
             }
           }

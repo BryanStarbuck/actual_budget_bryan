@@ -8,12 +8,20 @@ import { Paragraph } from '@actual-app/components/paragraph';
 import { styles } from '@actual-app/components/styles';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { importBudget } from '#budgetfiles/budgetfilesSlice';
 import { Modal, ModalCloseButton, ModalHeader } from '#components/common/Modal';
 import { ImportProgress } from '#components/modals/manager/ImportProgress';
 import { useNavigate } from '#hooks/useNavigate';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/manager/ImportYNAB4Modal.tsx',
+);
+
+// Import failures the user can fix by picking a different file (R7).
+const USER_FIXABLE_IMPORT_ERRORS = new Set(['not-ynab4']);
 
 function getErrorMessage(error: string): string {
   switch (error) {
@@ -43,6 +51,11 @@ export function ImportYNAB4Modal() {
         await dispatch(importBudget({ filepath: res[0], type: 'ynab4' }));
         void navigate('/budget');
       } catch (err) {
+        if (USER_FIXABLE_IMPORT_ERRORS.has(err.message)) {
+          errors.expected('importing a YNAB4 budget', err);
+        } else {
+          errors.caught('importing a YNAB4 budget', err);
+        }
         setError(err.message);
       } finally {
         setImporting(false);

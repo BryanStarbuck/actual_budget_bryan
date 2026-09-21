@@ -5,6 +5,7 @@ import { SvgAdd } from '@actual-app/components/icons/v1';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
+import { errorFileFor } from '@actual-app/error-file';
 import { css } from '@emotion/css';
 
 import { useCurrentWordRange } from '#hooks/useCurrentWordRange';
@@ -15,6 +16,10 @@ import { useTagCSS } from '#hooks/useTagCSS';
 import { useFilteredTags } from '#hooks/useTags';
 import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/autocomplete/NoteTagAutocomplete.tsx',
+);
 
 type NoteTagAutocompleteProps = {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -70,6 +75,7 @@ export function NoteTagAutocomplete({ inputRef }: NoteTagAutocompleteProps) {
         handleSelect(tag);
       }
     } catch (e) {
+      errors.caught('creating a note tag', e);
       dispatch(
         addNotification({
           notification: {
@@ -78,7 +84,6 @@ export function NoteTagAutocomplete({ inputRef }: NoteTagAutocompleteProps) {
           },
         }),
       );
-      console.trace(e);
     }
   }
 

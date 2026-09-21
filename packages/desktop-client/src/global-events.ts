@@ -1,5 +1,6 @@
 import { listen } from '@actual-app/core/platform/client/connection';
 import * as undo from '@actual-app/core/platform/client/undo';
+import { errorFileFor } from '@actual-app/error-file';
 // @ts-strict-ignore
 import type { QueryClient } from '@tanstack/react-query';
 import { t } from 'i18next';
@@ -19,8 +20,12 @@ import { loadPrefs } from './prefs/prefsSlice';
 import type { AppStore } from './redux/store';
 import * as syncEvents from './sync-events';
 
+const errors = errorFileFor('desktop-client/src/global-events.ts');
+
 export function handleGlobalEvents(store: AppStore, queryClient: QueryClient) {
   const unlistenServerError = listen('server-error', () => {
+    // pm/error_err.mdx §7 N5 — the engine side already wrote the real record.
+    errors.warn('receiving a server-error event from the engine');
     store.dispatch(addGenericErrorNotification());
   });
 

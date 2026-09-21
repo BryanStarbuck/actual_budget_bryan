@@ -5,8 +5,12 @@
  */
 import { z } from 'zod';
 
+import { errorFileFor } from '../vendor/error-file/index.ts';
+
 import { describe } from './tool.js';
 import type { ToolDef } from './tool.js';
+
+const errors = errorFileFor('mcp/src/tools/orientation.ts');
 
 const NO_ARGS = { type: 'object', properties: {}, additionalProperties: false };
 const noArgs = z.object({}).strip();
@@ -69,6 +73,8 @@ export const health: ToolDef = {
         data: { reachable: true, ...data },
       };
     } catch (err) {
+      // "The app is down" is this tool's answer, not a fault (R6).
+      errors.expected('probing the app health', err);
       return {
         data: {
           up: false,

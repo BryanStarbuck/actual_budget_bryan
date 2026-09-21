@@ -1,5 +1,6 @@
+import { errorFileFor } from '@actual-app/error-file';
+
 import * as fs from '#platform/server/fs';
-import { logger } from '#platform/server/log';
 
 type ServerConfig = {
   BASE_SERVER: string;
@@ -12,6 +13,8 @@ type ServerConfig = {
   ENABLEBANKING_SERVER: string;
 };
 
+const errors = errorFileFor('loot-core/src/server/server-config.ts');
+
 let config: ServerConfig | null = null;
 
 function joinURL(base: string | URL, ...paths: string[]): string {
@@ -23,7 +26,8 @@ function joinURL(base: string | URL, ...paths: string[]): string {
 export function isValidBaseURL(base: string): boolean {
   try {
     return Boolean(new URL(base));
-  } catch {
+  } catch (e) {
+    errors.expected('probing whether a server URL is valid', e);
     return false;
   }
 }
@@ -51,11 +55,7 @@ export function getServer(url?: string): ServerConfig | null {
         ENABLEBANKING_SERVER: joinURL(url, '/enablebanking'),
       };
     } catch (error) {
-      logger.warn(
-        'Unable to parse server URL - using the global config.',
-        { config },
-        error,
-      );
+      errors.warn('parsing the server URL', error);
       return config;
     }
   }

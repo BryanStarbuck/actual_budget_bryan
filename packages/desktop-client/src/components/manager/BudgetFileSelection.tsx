@@ -39,6 +39,7 @@ import type {
   SyncableLocalFile,
   SyncedLocalFile,
 } from '@actual-app/core/types/file';
+import { errorFileFor } from '@actual-app/error-file';
 import { css } from '@emotion/css';
 
 import {
@@ -56,6 +57,10 @@ import { useSyncServerStatus } from '#hooks/useSyncServerStatus';
 import { pushModal } from '#modals/modalsSlice';
 import { useDispatch, useSelector } from '#redux';
 import { getUserData } from '#users/usersSlice';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/manager/BudgetFileSelection.tsx',
+);
 
 function getFileDescription(file: File, t: (key: string) => string) {
   if (file.state === 'unknown') {
@@ -548,7 +553,7 @@ export function BudgetFileSelection({
     try {
       setCurrentUserId(userData?.userId ?? '');
     } catch (error) {
-      console.error('Failed to fetch users:', error);
+      errors.caught('reading the current user id', error);
     }
   }, [userData?.userId]);
 

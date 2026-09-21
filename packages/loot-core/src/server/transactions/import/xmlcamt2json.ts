@@ -1,5 +1,10 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import { parseStringPromise } from 'xml2js';
+
+const errors = errorFileFor(
+  'loot-core/src/server/transactions/import/xmlcamt2json.ts',
+);
 
 type DateRef = { DtTm: string } | { Dt: string };
 type Amt = { _: string };
@@ -109,8 +114,9 @@ function decodeXmlContent(content: Uint8Array): string {
   if (declaredEncoding && !/^utf-?8$/i.test(declaredEncoding)) {
     try {
       return new TextDecoder(declaredEncoding).decode(content);
-    } catch {
+    } catch (e) {
       // Unsupported or unknown encoding label; fall back to UTF-8.
+      errors.expected('decoding the CAMT file with its declared encoding', e);
     }
   }
 

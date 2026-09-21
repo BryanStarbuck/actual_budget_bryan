@@ -1,11 +1,14 @@
 // @ts-strict-ignore
 import { Timestamp } from '@actual-app/crdt';
+import { errorFileFor } from '@actual-app/error-file';
 
 import * as fs from '#platform/server/fs';
 import type { MetadataPrefs } from '#types/prefs';
 
 import { sendMessages } from './sync';
 import type { Message } from './sync';
+
+const errors = errorFileFor('loot-core/src/server/prefs.ts');
 
 export const BUDGET_TYPES = ['tracking', 'envelope'] as const;
 export type BudgetType = (typeof BUDGET_TYPES)[number];
@@ -31,10 +34,11 @@ export async function loadPrefs(id?: string): Promise<MetadataPrefs> {
 
   try {
     prefs = JSON.parse(await fs.readFile(fullpath));
-  } catch {
+  } catch (e) {
     // If the user messed something up, be flexible and allow them to
     // still load the budget database. Default the budget name to the
     // id.
+    errors.expected('reading the budget metadata.json', e);
     prefs = { id, budgetName: id };
   }
 

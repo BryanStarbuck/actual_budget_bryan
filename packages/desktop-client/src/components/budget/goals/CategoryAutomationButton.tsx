@@ -10,6 +10,7 @@ import { Tooltip } from '@actual-app/components/tooltip';
 import { View } from '@actual-app/components/view';
 import type { CategoryEntity } from '@actual-app/core/types/models';
 import type { Template } from '@actual-app/core/types/models/templates';
+import { errorFileFor } from '@actual-app/error-file';
 import { css, cx } from '@emotion/css';
 
 import {
@@ -29,6 +30,10 @@ import { useDispatch } from '#redux';
 import type { AutomationEntry } from './automationExamples';
 import { TemplateSentence } from './TemplateSentence';
 
+const errors = errorFileFor(
+  'desktop-client/src/components/budget/goals/CategoryAutomationButton.tsx',
+);
+
 function getAutomationEntries(
   goalDef: string | null | undefined,
 ): AutomationEntry[] {
@@ -44,7 +49,8 @@ function getAutomationEntries(
     return migrateTemplatesToAutomations(
       templates.filter(template => template.type !== 'error'),
     );
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the category goal definition', e);
     return [];
   }
 }
@@ -58,7 +64,8 @@ function getCleanupConfig(
   try {
     const parsed = JSON.parse(cleanupDef);
     return cleanupDefToEditor(Array.isArray(parsed) ? parsed : []);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the category cleanup definition', e);
     return emptyCleanupConfig();
   }
 }

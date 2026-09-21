@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import { send } from '@actual-app/core/platform/client/connection';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { useSyncServerStatus } from './useSyncServerStatus';
+
+const errors = errorFileFor(
+  'desktop-client/src/hooks/useEnableBankingStatus.ts',
+);
 
 export function useEnableBankingStatus(enabled = true) {
   const [configuredEnableBanking, setConfiguredEnableBanking] = useState<
@@ -19,7 +24,8 @@ export function useEnableBankingStatus(enabled = true) {
       try {
         const results = await send('enablebanking-status');
         setConfiguredEnableBanking(results.configured || false);
-      } catch {
+      } catch (e) {
+        errors.expected('probing the Enable Banking configuration', e);
         setConfiguredEnableBanking(false);
       } finally {
         setIsLoading(false);

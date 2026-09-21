@@ -29,6 +29,7 @@ import type {
   NearbyPayeeEntity,
   PayeeEntity,
 } from '@actual-app/core/types/models';
+import { errorFileFor } from '@actual-app/error-file';
 import { css, cx } from '@emotion/css';
 import { byLengthAsc, byStartAsc, Fzf } from 'fzf';
 
@@ -45,6 +46,10 @@ import {
 
 import { Autocomplete, AutocompleteFooter } from './Autocomplete';
 import { ItemHeader } from './ItemHeader';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/autocomplete/PayeeAutocomplete.tsx',
+);
 
 type PayeeAutocompleteItem = PayeeEntity &
   PayeeItemType & {
@@ -474,7 +479,7 @@ export function PayeeAutocomplete({
       try {
         await deletePayeeLocationMutation.mutateAsync(locationId);
       } catch (error) {
-        console.error('Failed to delete payee location', { error });
+        errors.caught('forgetting a payee location', error, { locationId });
       }
     },
     [deletePayeeLocationMutation],

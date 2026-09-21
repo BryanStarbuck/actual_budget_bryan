@@ -28,6 +28,9 @@
     },
     {
       "path": "../crdt"
+    },
+    {
+      "path": "../error-file"
     }
   ],
   "include": [".", "package.json"],

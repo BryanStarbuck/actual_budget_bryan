@@ -1,4 +1,14 @@
 import { retry as promiseRetry } from './retry';
+import { errorFileFor } from './vendor/error-file/index.ts';
+import { installNodeErrorFile } from './vendor/error-file/node.ts';
+
+// pm/error_err.mdx §7 N14. The loot-core bundle this process imports carries its own copy of the
+// library; both share one process-global sink, so the engine's records land here too.
+installNodeErrorFile({
+  app: 'electron-server',
+  where: 'desktop-electron/server.ts',
+});
+const errors = errorFileFor('desktop-electron/server.ts');
 
 const BACKEND_IMPORT_MAX_RETRIES = 30;
 
@@ -50,6 +60,7 @@ function toAppInitFailurePayload(error: unknown): AppInitFailurePayload {
   };
 }
 
+/** The caller has already written the FATAL record; this only tells the renderer. */
 function reportInitFailure(error: unknown) {
   const payload = toAppInitFailurePayload(error);
   console.error('Failed to initialize the backend:', error);
@@ -76,6 +87,9 @@ const lazyLoadBackend = async (isDev: boolean) => {
             `Loading server bundle: Attempt ${number} of ${BACKEND_IMPORT_MAX_RETRIES}`,
           );
 
+          // One failed attempt is the retry loop working (dev mode rebuilds); the fault, if
+          // the retries run out, is written by the catch below.
+          errors.expected('importing the server bundle', error);
           retry(error);
         }
       },
@@ -87,11 +101,13 @@ const lazyLoadBackend = async (isDev: boolean) => {
       },
     );
   } catch (error) {
-    reportInitFailure(
-      new Error(
-        `Failed to init the server bundle after all retries: ${String(error)}`,
-      ),
+    const failure = new Error(
+      `Failed to init the server bundle after all retries: ${String(error)}`,
     );
+    errors.fatal('importing the server bundle after all retries', failure, {
+      retries: BACKEND_IMPORT_MAX_RETRIES,
+    });
+    reportInitFailure(failure);
     return;
   }
 
@@ -102,6 +118,7 @@ const lazyLoadBackend = async (isDev: boolean) => {
     // process silently). Report it so the renderer can show the user what
     // went wrong, and stay alive so the "exit" handler in the main process
     // doesn't overwrite this more specific failure.
+    errors.fatal('initializing the backend', error);
     reportInitFailure(error);
   }
 };

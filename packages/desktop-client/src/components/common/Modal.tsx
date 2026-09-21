@@ -26,11 +26,15 @@ import { TextOneLine } from '@actual-app/components/text-one-line';
 import { theme } from '@actual-app/components/theme';
 import { tokens } from '@actual-app/components/tokens';
 import { View } from '@actual-app/components/view';
+import { errorFileFor, reportBoundaryError } from '@actual-app/error-file';
 import { css } from '@emotion/css';
 import { AutoTextSize } from 'auto-text-size';
 
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import { useModalState } from '#hooks/useModalState';
+
+const errors = errorFileFor('desktop-client/src/components/common/Modal.tsx');
+const reportRenderError = reportBoundaryError(errors, 'rendering a modal');
 
 export const MODAL_Z_INDEX = 3000;
 
@@ -77,7 +81,10 @@ export const Modal = ({
   };
 
   return (
-    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+    <ErrorBoundary
+      onError={reportRenderError}
+      FallbackComponent={FeatureErrorFallback}
+    >
       <ReactAriaModalOverlay
         data-testid={`${name}-modal`}
         isDismissable
@@ -146,7 +153,10 @@ export const Modal = ({
                   }}
                 >
                   <View style={{ paddingTop: 0, flex: 1, flexShrink: 0 }}>
-                    <ErrorBoundary FallbackComponent={FeatureErrorFallback}>
+                    <ErrorBoundary
+                      onError={reportRenderError}
+                      FallbackComponent={FeatureErrorFallback}
+                    >
                       {typeof children === 'function'
                         ? children(modalProps)
                         : children}

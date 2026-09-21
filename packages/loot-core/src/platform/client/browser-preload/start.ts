@@ -1,8 +1,13 @@
+import { errorFileFor } from '@actual-app/error-file';
 import { initBackend as initSQLBackend } from 'absurd-sql/dist/indexeddb-main-thread';
 
 import { logger } from '#platform/server/log';
 
 import { WorkerBridge } from './worker-bridge';
+
+const errors = errorFileFor(
+  'loot-core/src/platform/client/browser-preload/start.ts',
+);
 
 export type StartBackendInit = {
   version: string;
@@ -82,7 +87,8 @@ export function startBrowserBackend(
 
       return bridge;
     } catch (e) {
-      logger.log('SharedWorker failed, falling back to Worker:', e);
+      // The browser said it had SharedWorker but it did not start: fall back
+      errors.warn('starting the SharedWorker coordinator', e);
     }
   }
 

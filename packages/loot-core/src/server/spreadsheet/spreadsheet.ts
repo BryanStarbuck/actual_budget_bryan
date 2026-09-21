@@ -1,4 +1,5 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
 import mitt from 'mitt';
 
 import { logger } from '#platform/server/log';
@@ -13,6 +14,8 @@ import type { QueryState } from '#shared/query';
 
 import { Graph } from './graph-data-structure';
 import { resolveName, unresolveName } from './util';
+
+const errors = errorFileFor('loot-core/src/server/spreadsheet/spreadsheet.ts');
 
 export type Node = {
   name: string;
@@ -110,7 +113,7 @@ export class Spreadsheet {
     try {
       func();
     } catch (e) {
-      logger.log(e);
+      errors.caught('running a spreadsheet transaction', e);
     }
     return this.endTransaction();
   }
@@ -185,7 +188,7 @@ export class Spreadsheet {
           continue;
         }
       } catch (e) {
-        logger.log('Error while evaluating ' + name + ':', e);
+        errors.caught('evaluating a spreadsheet cell', e, { cell: name });
         // If an error happens, bail on the rest of the computations
         this.running = false;
         this.computeQueue = [];
@@ -201,8 +204,9 @@ export class Spreadsheet {
             this.runComputations(idx + 1);
           },
           err => {
-            // TODO: use captureException here
-            logger.warn(`Failed running ${node.name}!`, err);
+            errors.caught('computing an async spreadsheet cell', err, {
+              cell: node.name,
+            });
             this.runComputations(idx + 1);
           },
         );

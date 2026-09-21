@@ -2,6 +2,9 @@ import fs, { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { errorFileFor } from '@actual-app/error-file';
+import { createErrorReportHandler } from '@actual-app/error-file/ingest';
+import { installNodeErrorFile } from '@actual-app/error-file/node';
 import cors from 'cors';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
@@ -24,12 +27,11 @@ import {
   machineRouter,
   stopMachinePlane,
 } from './machine/index.js';
+import { errorMiddleware } from './util/middlewares';
+
+const errors = errorFileFor('sync-server/src/app.ts');
 
 const app = express();
-
-process.on('unhandledRejection', reason => {
-  console.log('Rejection:', reason);
-});
 
 app.disable('x-powered-by');
 app.use(cors());
@@ -96,6 +98,11 @@ app.use('/openid', openidApp.handlers);
 // gate refuses anything that looks like one.
 app.use('/machine/v1', machineRouter);
 
+// pm/error_err.mdx §8: browser and worker faults, loopback-only, always 204. Outside
+// /machine/v1 (no key — a browser must never hold one) and BEFORE the SPA catch-all and the dev
+// proxy below, which would otherwise swallow it.
+app.post('/error-report', createErrorReportHandler({ via: 'sync-server' }));
+
 app.get('/mode', (req, res) => {
   res.send(config.get('mode'));
 });
@@ -123,7 +130,7 @@ app.get('/info', (_req, res) => {
         directoriesSearched++;
       }
     } catch (error) {
-      console.error('Error while searching for package.json:', error);
+      errors.caught('searching for the sync-server package.json', error);
     }
 
     return null;
@@ -201,6 +208,9 @@ if (isDev) {
   );
 }
 
+// pm/error_err.mdx §7 N9: an app-level error net, after every route. The sub-apps keep their own.
+app.use(errorMiddleware);
+
 function parseHTTPSConfig(value: string) {
   if (value.startsWith('-----BEGIN')) {
     return value;
@@ -219,6 +229,13 @@ function sendServerStartedMessage() {
 }
 
 export async function run() {
+  // pm/error_err.mdx §7 N9. Idempotent (the entry app.ts installs first). The sync server has always
+  // stayed up on an unhandled rejection, so that is kept: it is written, not fatal.
+  installNodeErrorFile({
+    app: 'sync-server',
+    where: 'sync-server/src/app.ts',
+    crashOnUnhandledRejection: false,
+  });
   const portVal = config.get('port');
   const port = typeof portVal === 'string' ? parseInt(portVal) : portVal;
   const hostname = config.get('hostname');
@@ -236,7 +253,7 @@ export async function run() {
         console.log('OpenID configured!');
       }
     } catch (err) {
-      console.error(err);
+      errors.caught('bootstrapping OpenID at startup', err);
     }
   }
 

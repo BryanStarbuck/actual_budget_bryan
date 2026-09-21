@@ -22,8 +22,11 @@ import type { ExitCode } from './exit.js';
 import { Logger } from './logger.js';
 import { withSpinner } from './progress.js';
 import { parseFormat } from './render.js';
+import { errorFileFor } from './vendor/error-file/index.ts';
 import { flagsFor } from './verb.js';
 import type { Context, Verb } from './verb.js';
+
+const errors = errorFileFor('cli/code/src/main.ts');
 
 /**
  * The verb table. One array, read by dispatch AND by help, so a verb cannot
@@ -156,6 +159,7 @@ export async function main(
 ): Promise<ExitCode> {
   const logger = new Logger(env);
   let jsonErrors = false;
+  let verbName = '';
 
   try {
     // Help moves off the bare invocation (§8): bare `abx` is the orientation
@@ -180,6 +184,7 @@ export async function main(
     }
 
     const { verb, rest } = resolved;
+    verbName = verb.name;
     const args = parseArgs(rest, flagsFor(verb, UNIVERSAL_FLAGS));
     jsonErrors = getBoolean(args, 'json-errors');
 
@@ -259,6 +264,16 @@ export async function main(
     // operator — a stack on stderr buries the fix under twelve frames of our
     // own call graph, which is not information the operator can act on (§15).
     logger.error('ERROR', `${cliError.message}\n${(err as Error).stack ?? ''}`);
+    // pm/error_err.mdx §7 N18: the same fault also lands in error.err, next to cli.err. A usage
+    // refusal (bad flag, missing key, unreadable credentials file) is an answer, not a fault (R7).
+    if (cliError.code === Exit.usage) {
+      errors.expected('running an abx verb', err);
+    } else {
+      errors.caught('running an abx verb', err, {
+        verb: verbName,
+        exit: cliError.code,
+      });
+    }
     reportError(cliError, jsonErrors);
     return cliError.code;
   }

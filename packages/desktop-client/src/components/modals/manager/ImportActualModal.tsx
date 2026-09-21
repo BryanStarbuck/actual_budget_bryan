@@ -8,11 +8,26 @@ import { Paragraph } from '@actual-app/components/paragraph';
 import { styles } from '@actual-app/components/styles';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import { errorFileFor } from '@actual-app/error-file';
 
 import { importBudget } from '#budgetfiles/budgetfilesSlice';
 import { Modal, ModalCloseButton, ModalHeader } from '#components/common/Modal';
 import { useNavigate } from '#hooks/useNavigate';
 import { useDispatch } from '#redux';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/modals/manager/ImportActualModal.tsx',
+);
+
+// Import failures the user can fix by picking a different file (R7).
+const USER_FIXABLE_IMPORT_ERRORS = new Set([
+  'parse-error',
+  'not-ynab5',
+  'not-zip-file',
+  'invalid-zip-file',
+  'invalid-metadata-file',
+  'zip-too-large',
+]);
 
 export function ImportActualModal() {
   const { t } = useTranslation();
@@ -62,6 +77,11 @@ export function ImportActualModal() {
         await dispatch(importBudget({ filepath: res[0], type: 'actual' }));
         void navigate('/budget');
       } catch (err) {
+        if (USER_FIXABLE_IMPORT_ERRORS.has(err.message)) {
+          errors.expected('importing an Actual export', err);
+        } else {
+          errors.caught('importing an Actual export', err);
+        }
         setError(err.message);
       } finally {
         setImporting(false);

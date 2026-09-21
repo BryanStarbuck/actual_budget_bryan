@@ -2,7 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { errorFileFor } from '@actual-app/error-file';
 import lockfile from 'proper-lockfile';
+
+const errors = errorFileFor('cli/src/lock.ts');
 
 export type Release = () => Promise<void>;
 
@@ -59,6 +62,8 @@ function pidIsAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
+    // ESRCH means the reader is gone; EPERM means it exists but is not ours.
+    errors.expected('probing whether a reader process is alive', err);
     return errorCode(err) === 'EPERM';
   }
 }
@@ -67,7 +72,10 @@ function readReaderNames(readers: string): string[] {
   try {
     return readdirSync(readers);
   } catch (err) {
-    if (errorCode(err) === 'ENOENT') return [];
+    if (errorCode(err) === 'ENOENT') {
+      errors.expected('listing the optional readers directory', err);
+      return [];
+    }
     throw err;
   }
 }
@@ -105,7 +113,10 @@ async function acquireGate(
       stale: 30_000,
     });
   } catch (err) {
-    if (isLockedError(err)) throw new Error(lockedMessage(timeoutMs));
+    if (isLockedError(err)) {
+      errors.expected('acquiring the budget lock', err);
+      throw new Error(lockedMessage(timeoutMs));
+    }
     throw err;
   }
 }

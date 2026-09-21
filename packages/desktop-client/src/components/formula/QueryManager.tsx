@@ -18,6 +18,7 @@ import type {
   RuleConditionEntity,
   TimeFrame,
 } from '@actual-app/core/types/models';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { AppliedFilters } from '#components/filters/AppliedFilters';
 import { FilterButton } from '#components/filters/FiltersMenu';
@@ -38,6 +39,10 @@ import {
   normalizeQueryTimeFrameEnd,
   normalizeQueryTimeFrameStart,
 } from './queryTimeFrame';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/formula/QueryManager.tsx',
+);
 
 type QueryConfig = {
   conditions?: RuleConditionEntity[];
@@ -345,8 +350,14 @@ function QueryItem({
       try {
         const [earliestTransactionResult, latestTransactionResult] =
           await Promise.all([
-            send('get-earliest-transaction').catch(() => null),
-            send('get-latest-transaction').catch(() => null),
+            send('get-earliest-transaction').catch(e => {
+              errors.caught('fetching the earliest transaction', e);
+              return null;
+            }),
+            send('get-latest-transaction').catch(e => {
+              errors.caught('fetching the latest transaction', e);
+              return null;
+            }),
           ]);
 
         const computedBounds = calculateDateRangeBoundMonths(
@@ -372,7 +383,7 @@ function QueryItem({
         setIsTransactionBoundsReady(true);
       }
     }
-    void run();
+    reportRejection(errors, 'loading the transaction date bounds', run());
   }, []);
 
   const filters = useRuleConditionFilters(
@@ -467,7 +478,8 @@ function QueryItem({
           },
         }),
       );
-    } catch {
+    } catch (e) {
+      errors.caught('copying the query configuration to the clipboard', e);
       dispatch(
         addNotification({
           notification: {
@@ -518,7 +530,9 @@ function QueryItem({
           }),
         );
       }
-    } catch {
+    } catch (e) {
+      // Malformed pasted JSON is user input, not a fault (R7).
+      errors.expected('parsing an imported query configuration', e);
       dispatch(
         addNotification({
           notification: {

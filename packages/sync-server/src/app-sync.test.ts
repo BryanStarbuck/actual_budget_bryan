@@ -799,7 +799,11 @@ describe('/download-user-file', () => {
         .set('x-actual-token', 'valid-token')
         .set('x-actual-file-id', 'missing-fs-file');
 
-      expect(res.statusCode).toEqual(404);
+      // errorMiddleware is now registered after the routes (pm/error_err.mdx §7 N10), so the
+      // ENOENT from res.download() reaches it and becomes the 500 it has always produced,
+      // instead of Express's default 404.
+      expect(res.statusCode).toEqual(500);
+      expect(res.body).toEqual({ status: 'error', reason: 'internal-error' });
     });
 
     it('returns an attachment file', async () => {

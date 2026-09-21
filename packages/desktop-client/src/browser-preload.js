@@ -1,11 +1,14 @@
 import { startBrowserBackend } from '@actual-app/core/platform/client/browser-preload';
 import * as Platform from '@actual-app/core/shared/platform';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { registerSW } from 'virtual:pwa-register';
 
 // oxlint-disable-next-line typescript-paths/absolute-parent-import
 import packageJson from '../package.json';
 
 import SharedBrowserServerWorker from './shared-browser-server.ts?sharedworker';
+
+const errors = errorFileFor('desktop-client/src/browser-preload.js');
 
 const backendWorkerUrl = new URL('./browser-server.js', import.meta.url);
 
@@ -73,7 +76,7 @@ if (navigator.storage?.persist) {
       }
     })
     .catch(error => {
-      console.warn('Persistent storage request failed:', error);
+      errors.warn('requesting persistent storage', error);
     });
 }
 
@@ -200,11 +203,16 @@ global.Actual = {
           reader.onload = async function (ev) {
             const filepath = `/uploads/${filename}`;
 
-            void window.__actionsForMenu
-              .uploadFile(filename, ev.target.result)
-              .then(() => resolve([filepath]));
+            reportRejection(
+              errors,
+              'uploading the chosen file',
+              window.__actionsForMenu
+                .uploadFile(filename, ev.target.result)
+                .then(() => resolve([filepath])),
+            );
           };
           reader.onerror = function () {
+            errors.caught('reading the chosen file', reader.error);
             alert('Error reading file');
           };
         }

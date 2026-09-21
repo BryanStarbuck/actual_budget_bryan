@@ -8,6 +8,7 @@ import type {
   BankSyncProviders,
 } from '@actual-app/core/types/models';
 import type { SyncServerSimpleFinAccount } from '@actual-app/core/types/models/simplefin';
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 
 import { authorizeBank as authorizeEnableBanking } from '#enablebanking';
 import { authorizeBank } from '#gocardless';
@@ -24,6 +25,10 @@ import { addNotification } from '#notifications/notificationsSlice';
 import { useDispatch } from '#redux';
 
 import { BUILT_IN_BANK_SYNC_PROVIDERS } from './bankSyncUtils';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/banksync/useBuiltInBankSyncProviders.ts',
+);
 
 type ProviderAction = () => void | Promise<void>;
 
@@ -260,6 +265,7 @@ export function useBuiltInBankSyncProviders({
       );
       setIsGoCardlessSetupComplete(false);
     } catch (error) {
+      errors.caught('resetting the GoCardless credentials', error);
       notifyResetFailure('GoCardless', error);
     }
   }, [notifyResetFailure]);
@@ -282,6 +288,7 @@ export function useBuiltInBankSyncProviders({
       );
       setIsSimpleFinSetupComplete(false);
     } catch (error) {
+      errors.caught('resetting the SimpleFIN credentials', error);
       notifyResetFailure('SimpleFIN', error);
     }
   }, [notifyResetFailure]);
@@ -320,6 +327,7 @@ export function useBuiltInBankSyncProviders({
       );
       setPluggyAiStatus(await send('pluggyai-status'));
     } catch (error) {
+      errors.caught('resetting the Pluggy.ai credentials', error);
       notifyResetFailure('Pluggy.ai', error);
     }
   }, [
@@ -348,6 +356,7 @@ export function useBuiltInBankSyncProviders({
       );
       setIsEnableBankingSetupComplete(false);
     } catch (error) {
+      errors.caught('resetting the Enable Banking credentials', error);
       notifyResetFailure('Enable Banking', error);
     }
   }, [notifyResetFailure]);
@@ -370,7 +379,7 @@ export function useBuiltInBankSyncProviders({
       );
       setIsAkahuSetupComplete(false);
     } catch (error) {
-      console.log(error);
+      errors.caught('resetting the Akahu credentials', error);
       notifyResetFailure('Akahu', error);
     }
   }, [notifyResetFailure]);
@@ -381,7 +390,11 @@ export function useBuiltInBankSyncProviders({
       return;
     }
 
-    void authorizeBank(dispatch, upgradingAccountId);
+    reportRejection(
+      errors,
+      'starting the GoCardless bank authorization',
+      authorizeBank(dispatch, upgradingAccountId),
+    );
   }, [
     dispatch,
     isGoCardlessSetupComplete,
@@ -438,6 +451,7 @@ export function useBuiltInBankSyncProviders({
         }),
       );
     } catch (error) {
+      errors.caught('listing the SimpleFIN accounts', error);
       dispatch(
         addNotification({
           notification: {
@@ -469,6 +483,7 @@ export function useBuiltInBankSyncProviders({
     try {
       await authorizeEnableBanking(dispatch, upgradingAccountId);
     } catch (error) {
+      errors.caught('starting the Enable Banking authorization', error);
       dispatch(
         addNotification({
           notification: {
@@ -534,6 +549,7 @@ export function useBuiltInBankSyncProviders({
         }),
       );
     } catch (error) {
+      errors.caught('listing the Pluggy.ai accounts', error);
       dispatch(
         addNotification({
           notification: {
@@ -612,6 +628,7 @@ export function useBuiltInBankSyncProviders({
         }),
       );
     } catch (error) {
+      errors.caught('listing the Akahu accounts', error);
       dispatch(
         addNotification({
           notification: {

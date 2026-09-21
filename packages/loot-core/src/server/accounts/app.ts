@@ -1,6 +1,6 @@
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { v4 as uuidv4 } from 'uuid';
 
-import { captureException } from '#platform/exceptions';
 import * as asyncStorage from '#platform/server/asyncStorage';
 import * as connection from '#platform/server/connection';
 import { logger } from '#platform/server/log';
@@ -42,6 +42,8 @@ import type {
 import * as link from './link';
 import { getStartingBalancePayee } from './payees';
 import * as bankSync from './sync';
+
+const errors = errorFileFor('loot-core/src/server/accounts/app.ts');
 
 // Shared base type for link account parameters
 type LinkAccountBaseParams = {
@@ -649,6 +651,8 @@ async function closeAccount({
         // because another client could easily add new data that
         // should be marked as deleted.
 
+        // The per-row calls are not wrapped: this is the closed account's whole transaction list,
+        // and pm/error_err.mdx §9 forbids wrapping a hot loop body.
         rows.forEach(row => {
           if (row.transfer_id) {
             void db.updateTransaction({
@@ -661,8 +665,16 @@ async function closeAccount({
           void db.deleteTransaction({ id: row.id });
         });
 
-        void db.deleteAccount({ id });
-        void db.deleteTransferPayee({ id: transferPayee.id });
+        reportRejection(
+          errors,
+          'deleting the closed account',
+          db.deleteAccount({ id }),
+        );
+        reportRejection(
+          errors,
+          'deleting the closed account transfer payee',
+          db.deleteTransferPayee({ id: transferPayee.id }),
+        );
       });
     } else {
       if (balance !== 0 && transferAccountId == null) {
@@ -760,6 +772,7 @@ async function setSecret({
       headers,
     );
   } catch (error) {
+    errors.caught('saving a secret on the server', error);
     return {
       error: 'failed',
       reason: error instanceof PostError ? error.reason : undefined,
@@ -783,7 +796,7 @@ async function checkSecret(name: string) {
       'X-ACTUAL-TOKEN': userToken,
     });
   } catch (error) {
-    logger.error(error);
+    errors.caught('checking a secret on the server', error);
     return { error: 'failed' };
   }
 }
@@ -835,33 +848,48 @@ async function pollGoCardlessWebToken({
 
     if (data) {
       if (data.error_code) {
-        logger.error('Failed linking gocardless account:', data);
+        errors.warn('linking a GoCardless account', undefined, {
+          errorCode: data.error_code,
+          errorType: data.error_type,
+        });
         cb({ status: 'unknown', message: data.error_type });
       } else {
         cb({ status: 'success', data });
       }
     } else {
-      setTimeout(() => getData(cb), 3000);
+      setTimeout(
+        () =>
+          reportRejection(
+            errors,
+            'polling the GoCardless requisition',
+            getData(cb),
+          ),
+        3000,
+      );
     }
   }
 
   return new Promise(resolve => {
-    void getData(data => {
-      if (data.status === 'success') {
-        resolve({ data: data.data });
-        return;
-      }
+    reportRejection(
+      errors,
+      'polling the GoCardless requisition',
+      getData(data => {
+        if (data.status === 'success') {
+          resolve({ data: data.data });
+          return;
+        }
 
-      if (data.status === 'timeout') {
-        resolve({ error: data.status });
-        return;
-      }
+        if (data.status === 'timeout') {
+          resolve({ error: data.status });
+          return;
+        }
 
-      resolve({
-        error: data.status,
-        message: data.message,
-      });
-    });
+        resolve({
+          error: data.status,
+          message: data.message,
+        });
+      }),
+    );
   });
 }
 
@@ -977,7 +1005,8 @@ async function simpleFinAccounts() {
       },
       60000,
     );
-  } catch {
+  } catch (e) {
+    errors.caught('fetching the SimpleFin account list', e);
     return { error_code: 'TIMED_OUT' };
   }
 }
@@ -1005,7 +1034,8 @@ async function pluggyAiAccounts() {
       },
       60000,
     );
-  } catch {
+  } catch (e) {
+    errors.caught('fetching the Pluggy.ai account list', e);
     return { error_code: 'TIMED_OUT' };
   }
 }
@@ -1031,7 +1061,8 @@ async function akahuAccounts() {
       },
       60000,
     );
-  } catch {
+  } catch (e) {
+    errors.caught('fetching the Akahu account list', e);
     return { error_code: 'TIMED_OUT' };
   }
 }
@@ -1271,7 +1302,7 @@ async function createGoCardlessWebToken({
       },
     );
   } catch (error) {
-    logger.error(error);
+    errors.caught('creating a GoCardless web token', error);
     return { error: 'failed' };
   }
 }
@@ -1454,7 +1485,7 @@ async function accountsBankSync({
     true,
   );
 
-  const errors: ReturnType<typeof handleSyncError>[] = [];
+  const syncErrors: ReturnType<typeof handleSyncError>[] = [];
   const newTransactions: Array<TransactionEntity['id']> = [];
   const matchedTransactions: Array<TransactionEntity['id']> = [];
   const updatedAccounts: Array<AccountEntity['id']> = [];
@@ -1486,11 +1517,8 @@ async function accountsBankSync({
       } catch (err) {
         const error = err as Error;
         await persistBankSyncError(acct.id, error);
-        errors.push(handleSyncError(error, acct));
-        captureException({
-          ...error,
-          message: 'Failed syncing account "' + acct.name + '."',
-        } as Error);
+        syncErrors.push(handleSyncError(error, acct));
+        errors.caught('syncing a bank account', error, { accountId: acct.id });
       } finally {
         logger.groupEnd();
       }
@@ -1504,7 +1532,12 @@ async function accountsBankSync({
     });
   }
 
-  return { errors, newTransactions, matchedTransactions, updatedAccounts };
+  return {
+    errors: syncErrors,
+    newTransactions,
+    matchedTransactions,
+    updatedAccounts,
+  };
 }
 
 async function simpleFinBatchSync({
@@ -1556,13 +1589,17 @@ async function simpleFinBatchSync({
     for (const syncResponse of syncResponses) {
       const account = accounts.find(a => a.id === syncResponse.accountId);
       if (!account) {
-        logger.error(
-          `Invalid account ID found in response: ${syncResponse.accountId}. Proceeding to the next account...`,
+        errors.warn(
+          'matching a SimpleFin sync response to an account',
+          undefined,
+          {
+            accountId: syncResponse.accountId,
+          },
         );
         continue;
       }
 
-      const errors: ReturnType<typeof handleSyncError>[] = [];
+      const syncErrors: ReturnType<typeof handleSyncError>[] = [];
       const newTransactions: Array<TransactionEntity['id']> = [];
       const matchedTransactions: Array<TransactionEntity['id']> = [];
       const updatedAccounts: Array<AccountEntity['id']> = [];
@@ -1576,7 +1613,7 @@ async function simpleFinBatchSync({
         } as BankSyncError;
 
         await persistBankSyncError(account.id, bankSyncError);
-        errors.push(handleSyncError(bankSyncError, account));
+        syncErrors.push(handleSyncError(bankSyncError, account));
       } else if (syncResponse.res) {
         const syncResponseData = await handleSyncResponse(
           syncResponse.res,
@@ -1591,15 +1628,23 @@ async function simpleFinBatchSync({
           'Failed syncing account "' + account.name + '": empty response',
         );
         await persistBankSyncError(account.id, emptyResponseError);
-        errors.push(handleSyncError(emptyResponseError, account));
+        syncErrors.push(handleSyncError(emptyResponseError, account));
       }
 
       retVal.push({
         accountId: syncResponse.accountId,
-        res: { errors, newTransactions, matchedTransactions, updatedAccounts },
+        res: {
+          errors: syncErrors,
+          newTransactions,
+          matchedTransactions,
+          updatedAccounts,
+        },
       });
     }
   } catch (err) {
+    errors.caught('batch syncing the SimpleFin accounts', err, {
+      accountCount: accounts.length,
+    });
     for (const account of accounts) {
       const error = err as Error;
       await persistBankSyncError(account.id, error);
@@ -1676,6 +1721,7 @@ async function importTransactions({
     };
   } catch (err) {
     if (err instanceof TransactionError) {
+      errors.expected('reconciling the imported transactions', err);
       return {
         errors: [{ message: err.message }],
         added: [],
@@ -1761,7 +1807,7 @@ async function unlinkAccount({ id }: { id: AccountEntity['id'] }) {
         },
       );
     } catch (error) {
-      logger.log({ error });
+      errors.caught('removing the GoCardless requisition', error);
     }
   }
 

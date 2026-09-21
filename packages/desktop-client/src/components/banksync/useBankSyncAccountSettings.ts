@@ -7,6 +7,7 @@ import {
 } from '@actual-app/core/server/util/custom-sync-mapping';
 import type { Mappings } from '@actual-app/core/server/util/custom-sync-mapping';
 import { q } from '@actual-app/core/shared/query';
+import { errorFileFor, tryOr } from '@actual-app/error-file';
 
 import { useSyncedPref } from '#hooks/useSyncedPref';
 import { useTransactions } from '#hooks/useTransactions';
@@ -16,6 +17,10 @@ import type {
   MappableFieldWithExample,
   TransactionDirection,
 } from './EditSyncAccount';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/banksync/useBankSyncAccountSettings.ts',
+);
 
 export function useBankSyncAccountSettings(accountId: string) {
   const [savedMappings = mappingsToString(defaultMappings), setSavedMappings] =
@@ -71,14 +76,14 @@ export function useBankSyncAccountSettings(accountId: string) {
   });
 
   const data = transactions?.[0]?.raw_synced_data;
-  let exampleTransaction;
-  if (data) {
-    try {
-      exampleTransaction = JSON.parse(data);
-    } catch (error) {
-      console.error('Failed to parse transaction data:', error);
-    }
-  }
+  const exampleTransaction = data
+    ? tryOr(
+        errors,
+        'parsing the raw synced transaction data',
+        () => JSON.parse(data),
+        undefined,
+      )
+    : undefined;
 
   const fields: MappableFieldWithExample[] = exampleTransaction
     ? getFields(exampleTransaction)

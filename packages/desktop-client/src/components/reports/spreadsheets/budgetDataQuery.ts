@@ -7,10 +7,15 @@ import type {
   RuleConditionEntity,
 } from '@actual-app/core/types/models';
 import type { SyncedPrefs } from '@actual-app/core/types/prefs';
+import { errorFileFor } from '@actual-app/error-file';
 
 import type { QueryDataEntity } from '#components/reports/ReportOptions';
 
 import type { BudgetMonthCell } from './budgetMonthCell';
+
+const errors = errorFileFor(
+  'desktop-client/src/components/reports/spreadsheets/budgetDataQuery.ts',
+);
 
 type BudgetDataConditionsOp = 'and' | 'or';
 
@@ -160,7 +165,9 @@ export function filterCategoriesByConditions(
     ) {
       try {
         return new RegExp(condition.value, 'i').test(textValue);
-      } catch {
+      } catch (e) {
+        // A user-typed pattern that does not compile is an answer, not a fault (R7)
+        errors.expected('compiling a category filter regex', e);
         return false;
       }
     }

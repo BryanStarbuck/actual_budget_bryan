@@ -1,5 +1,8 @@
 /// <reference lib="WebWorker" />
+import { errorFileFor, reportRejection } from '@actual-app/error-file';
 import { precacheAndRoute } from 'workbox-precaching';
+
+const errors = errorFileFor('plugins-service/src/plugin-service-worker.ts');
 
 // Service Worker Global Types
 declare const self: ServiceWorkerGlobalScope & {
@@ -32,21 +35,33 @@ self.addEventListener('install', (_event: ExtendableEvent) => {
 
 // Log activation event
 self.addEventListener('activate', (_event: ExtendableEvent) => {
-  void self.clients.claim();
+  reportRejection(
+    errors,
+    'claiming the plugin worker clients',
+    self.clients.claim(),
+  );
 
-  void self.clients.matchAll().then(clients => {
-    clients.forEach(client => {
-      client.postMessage({
-        type: 'service-worker-ready',
-        timestamp: Date.now(),
+  reportRejection(
+    errors,
+    'announcing the plugin worker to its clients',
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'service-worker-ready',
+          timestamp: Date.now(),
+        });
       });
-    });
-  });
+    }),
+  );
 });
 
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data && (event.data as PluginMessage).type === 'SKIP_WAITING') {
-    void self.skipWaiting();
+    reportRejection(
+      errors,
+      'skipping the plugin worker wait',
+      self.skipWaiting(),
+    );
   }
 });
 
@@ -119,10 +134,7 @@ async function handlePlugin(slug: string, fileName: string): Promise<Response> {
               content = JSON.stringify(manifest);
             }
           } catch (error) {
-            console.error(
-              'Failed to parse manifest for publicPath rewrite:',
-              error,
-            );
+            errors.caught('rewriting the plugin manifest publicPath', error);
           }
 
           headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';

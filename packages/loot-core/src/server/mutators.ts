@@ -1,7 +1,29 @@
 // @ts-strict-ignore
+import { errorFileFor } from '@actual-app/error-file';
+
 import { captureBreadcrumb, captureException } from '#platform/exceptions';
 import { sequential } from '#shared/async';
 import type { HandlerFunctions, Handlers } from '#types/handlers';
+
+// pm/error_err.mdx §7 N7: runHandler sees every handler call on every platform (browser worker,
+// Electron, api), so it is the engine's net. It observes the rejection on a side branch and never
+// changes what the caller receives.
+const errors = errorFileFor('loot-core/src/server/mutators.ts');
+
+function observeHandler<P extends Promise<unknown>>(
+  name: string,
+  promise: P,
+): P {
+  void promise.then(undefined, err => {
+    // An APIError is an answer to bad input, not a fault (R7).
+    if (err?.type === 'APIError') {
+      errors.expected(`running the ${name} handler`, err);
+    } else {
+      errors.caught(`running the ${name} handler`, err);
+    }
+  });
+  return promise;
+}
 
 const runningMethods = new Set();
 
@@ -51,9 +73,10 @@ export async function runHandler<T extends Handlers[keyof Handlers]>(
   }
 
   if (mutatingMethods.has(handler)) {
-    return runMutator(() => handler(args), { undoTag }) as Promise<
-      ReturnType<T>
-    >;
+    return observeHandler(
+      name,
+      runMutator(() => handler(args), { undoTag }),
+    ) as Promise<ReturnType<T>>;
   }
 
   // When closing a file, it clears out all global state for the file. That
@@ -64,7 +87,7 @@ export async function runHandler<T extends Handlers[keyof Handlers]>(
     await flushRunningMethods();
   }
 
-  const promise = handler(args);
+  const promise = observeHandler(name, handler(args));
   runningMethods.add(promise);
   // Remove on rejection too — a stale promise poisons every later flush.
   const remove = () => runningMethods.delete(promise);
