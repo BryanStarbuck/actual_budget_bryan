@@ -247,7 +247,7 @@ export async function run() {
     console.log('OpenID configuration found. Preparing server to use it');
     try {
       const result = await bootstrap({ openId: openIdConfig }, true);
-      if ('error' in result && result.error) {
+      if (result && 'error' in result && result.error) {
         console.log(result.error);
       } else {
         console.log('OpenID configured!');

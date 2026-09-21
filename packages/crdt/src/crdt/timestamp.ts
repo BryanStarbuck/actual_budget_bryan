@@ -1,7 +1,10 @@
+import { errorFileFor } from '@actual-app/error-file';
 import murmurhash from 'murmurhash';
 import { v4 as uuidv4 } from 'uuid';
 
 import type { TrieNode } from './merkle';
+
+const errors = errorFileFor('crdt/src/crdt/timestamp.ts');
 
 /**
  * Hybrid Unique Logical Clock (HULC) timestamp generator
@@ -57,7 +60,8 @@ export function deserializeClock(clock: string): Clock {
   let data;
   try {
     data = JSON.parse(clock);
-  } catch {
+  } catch (e) {
+    errors.expected('parsing the stored clock', e);
     data = {
       timestamp: '1970-01-01T00:00:00.000Z-0000-' + makeClientId(),
       merkle: {},

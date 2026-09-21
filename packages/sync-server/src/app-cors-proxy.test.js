@@ -33,7 +33,7 @@ setErrorSink({
   echo: false,
   verbose: false,
   write: errorFileWrite,
-  flush: () => {},
+  flush: vi.fn(),
 });
 
 describe('app-cors-proxy', () => {

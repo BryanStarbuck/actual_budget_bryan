@@ -15,5 +15,6 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo",
     "types": ["vitest/globals"]
   },
+  "references": [{ "path": "../error-file" }],
   "include": ["./src/"]
 }

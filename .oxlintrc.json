@@ -43,7 +43,7 @@
     "actual/enforce-boundaries": "error",
     "actual/no-extraneous-dependencies": "error",
     // pm/error_err.mdx §12.1 — "warn" during the Phase C rollout (§15.2 step 5); flips to "error" in Phase D.
-    "actual/catch-must-report": "warn",
+    "actual/catch-must-report": "error",
 
     // JSX A11y rules
     "jsx-a11y/no-autofocus": [

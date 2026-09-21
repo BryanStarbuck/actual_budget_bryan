@@ -39,6 +39,7 @@
     "typecheck": "tsgo -b"
   },
   "dependencies": {
+    "@actual-app/error-file": "workspace:*",
     "@bufbuild/protobuf": "^2.12.1",
     "murmurhash": "^2.0.1",
     "uuid": "^14.0.2"

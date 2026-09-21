@@ -66,18 +66,19 @@ export function SummaryCard({
     latestTransaction,
   );
 
-  const content = useMemo(
-    () =>
-      (meta?.content
+  const content = useMemo(() => {
+    const metaContent = meta?.content;
+    return (
+      metaContent
         ? tryOr(
             errors,
             'parsing the summary card settings',
-            () => JSON.parse(meta.content),
+            () => JSON.parse(metaContent),
             { type: 'sum' },
           )
-        : { type: 'sum' }) as SummaryContent,
-    [meta],
-  );
+        : { type: 'sum' }
+    ) as SummaryContent;
+  }, [meta]);
 
   const params = useMemo(
     () =>

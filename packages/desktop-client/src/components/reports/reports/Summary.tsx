@@ -88,12 +88,13 @@ function SummaryInner({ widget }: SummaryInnerProps) {
     widget?.meta?.conditionsOp ?? 'and',
   );
 
+  const widgetContent = widget?.meta?.content;
   const [content, setContent] = useState<SummaryContent>(
-    widget?.meta?.content
+    widgetContent
       ? tryOr(
           errors,
           'parsing the summary widget settings',
-          () => JSON.parse(widget.meta.content),
+          () => JSON.parse(widgetContent),
           {
             type: 'sum',
             divisorAllTimeDateRange: false,
