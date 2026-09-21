@@ -184,21 +184,21 @@ Three halves, each load-bearing:
 
 ## Overview
 
-|                        |                                                                                           |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| **Server key**         | `actual_budget` — matches `serverInfo.name` exactly                                       |
-| **Tool prefix**        | `ab_` on every tool, no exceptions                                                        |
-| **Lives in**           | `~/BGit/Bryan_git/actual_budget_bryan/mcp/` (top level, outside the workspace glob)       |
-| **Stack**              | TypeScript on Node ≥ 22, ESM, `@modelcontextprotocol/sdk` pinned exact                    |
-| **Transport**          | stdio, newline-delimited JSON-RPC. `stdout` carries **only** JSON-RPC                     |
-| **Talks to**           | `http://127.0.0.1:5006/machine/v1/*` — the machine-plane API ([apis.mdx](./apis.mdx))     |
-| **Contract**           | [apis.mdx](./apis.mdx) is the authority on the wire; this spec is one of its two clients  |
-| **Authenticates with** | `X-Actual-Machine-Key`, from `~/.credentials/actual_budget.json` (0600)                   |
-| **Env prefix**         | `ABMCP_`                                                                                  |
-| **Logs**               | `~/T/_actual_budget/mcp.info` and `mcp.err` — beside the CLI's `cli.info`/`cli.err`       |
+|                        |                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| **Server key**         | `actual_budget` — matches `serverInfo.name` exactly                                                 |
+| **Tool prefix**        | `ab_` on every tool, no exceptions                                                                  |
+| **Lives in**           | `~/BGit/Bryan_git/actual_budget_bryan/mcp/` (top level, outside the workspace glob)                 |
+| **Stack**              | TypeScript on Node ≥ 22, ESM, `@modelcontextprotocol/sdk` pinned exact                              |
+| **Transport**          | stdio, newline-delimited JSON-RPC. `stdout` carries **only** JSON-RPC                               |
+| **Talks to**           | `http://127.0.0.1:5006/machine/v1/*` — the machine-plane API ([apis.mdx](./apis.mdx))               |
+| **Contract**           | [apis.mdx](./apis.mdx) is the authority on the wire; this spec is one of its two clients            |
+| **Authenticates with** | `X-Actual-Machine-Key`, from `~/.credentials/actual_budget.json` (0600)                             |
+| **Env prefix**         | `ABMCP_`                                                                                            |
+| **Logs**               | `~/T/_actual_budget/mcp.info` and `mcp.err` — beside the CLI's `cli.info`/`cli.err`                 |
 | **Writes?**            | **off by default.** 50 of 68 tools read; the 18 that write need two switches, a dry run and a token |
-| **Computes?**          | nothing                                                                                   |
-| **Instructions**       | `ai/mcp_prompt.md`, loaded from disk at startup — editable without a rebuild (§8.3)       |
+| **Computes?**          | nothing                                                                                             |
+| **Instructions**       | `ai/mcp_prompt.md`, loaded from disk at startup — editable without a rebuild (§8.3)                 |
 
 ---
 
@@ -212,7 +212,7 @@ shares its credential, its routes and its engine with the CLI, so an answer an a
 answer an operator reads in a terminal are the same answer, produced by the same code, or one of
 them is a bug.
 
-The size of the catalogue is the point, not an accident. A budget tool an agent can only *read* is
+The size of the catalogue is the point, not an accident. A budget tool an agent can only _read_ is
 a novelty; an agent that can read the ledger, find where the money went, build next month from the
 last six, cover an overspend out of another envelope, reconcile against a paper statement, author a
 rule that fixes the next two hundred transactions, import a decade of bank statements into
@@ -753,17 +753,17 @@ in §5 — nothing is read from disk and there is no missing-file case to handle
 
 **What belongs in it**, and the split is strict:
 
-| This spec (`mcp.mdx`)                     | The payload (`ai/mcp_prompt.md`)                              |
-| ----------------------------------------- | -------------------------------------------------------------- |
-| Which tools exist and what they take      | Which tool to reach for when someone says "where's my money going" |
-| The response envelope                     | How to report a number to a human, and what to say about scope |
-| That writes need a token                  | That you show the operator the preview and wait for a real yes |
-| That money is integer cents               | That you never do arithmetic on money, and what to do instead  |
-| The error vocabulary                      | What to say to the operator for each code                      |
-| —                                         | When to ask a clarifying question and when to just decide      |
-| —                                         | How to break a request into a visible todo list                |
-| —                                         | The playbooks: the dozen things an operator actually asks      |
-| —                                         | The judgement the model is allowed to have, and the line it does not cross |
+| This spec (`mcp.mdx`)                | The payload (`ai/mcp_prompt.md`)                                           |
+| ------------------------------------ | -------------------------------------------------------------------------- |
+| Which tools exist and what they take | Which tool to reach for when someone says "where's my money going"         |
+| The response envelope                | How to report a number to a human, and what to say about scope             |
+| That writes need a token             | That you show the operator the preview and wait for a real yes             |
+| That money is integer cents          | That you never do arithmetic on money, and what to do instead              |
+| The error vocabulary                 | What to say to the operator for each code                                  |
+| —                                    | When to ask a clarifying question and when to just decide                  |
+| —                                    | How to break a request into a visible todo list                            |
+| —                                    | The playbooks: the dozen things an operator actually asks                  |
+| —                                    | The judgement the model is allowed to have, and the line it does not cross |
 
 **Rules on the payload:**
 
@@ -799,14 +799,14 @@ forgotten.
 
 `ab_<verb>_<noun>`, verb from a **closed set**:
 
-| Verb                                                           | Means                                             | Writes? |
-| -------------------------------------------------------------- | ------------------------------------------------- | ------- |
-| `list_`                                                        | read many                                         | no      |
-| `get_`                                                         | read one                                          | no      |
-| `scan_`                                                        | read the filesystem, compute nothing persistent   | no      |
-| `plan_`                                                        | compute what a write would do, and change nothing | no      |
-| `describe_`                                                    | read a shape — a schema, a map file's structure   | no      |
-| `add_` / `update_` / `set_` / `delete_` / `apply_` / `sync_`   | change something                                  | **yes** |
+| Verb                                                         | Means                                             | Writes? |
+| ------------------------------------------------------------ | ------------------------------------------------- | ------- |
+| `list_`                                                      | read many                                         | no      |
+| `get_`                                                       | read one                                          | no      |
+| `scan_`                                                      | read the filesystem, compute nothing persistent   | no      |
+| `plan_`                                                      | compute what a write would do, and change nothing | no      |
+| `describe_`                                                  | read a shape — a schema, a map file's structure   | no      |
+| `add_` / `update_` / `set_` / `delete_` / `apply_` / `sync_` | change something                                  | **yes** |
 
 Plus two bare names with no noun, because the noun would be this server: **`ab_whoami`**,
 **`ab_health`**. A third, **`ab_query`**, is the escape hatch and is named for what it is.
@@ -873,53 +873,53 @@ Ten families. Read tools first, because they are what the model spends its day i
 
 **Orientation (4, read)** — the first call of any session that will do anything
 
-| Tool               | Answers                                                                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `ab_whoami`        | which install, which budget (id **and** name), server version, key fingerprint, write tier, target, data date range |
-| `ab_list_budgets`  | the budget files this install knows                                                                        |
-| `ab_health`        | is the app up; if not, the exact command to bring it up. **Never starts it** (§9.8)                        |
-| `ab_capabilities`  | what this server build can actually do, so a missing feature is a sentence and not a 404                   |
+| Tool              | Answers                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ab_whoami`       | which install, which budget (id **and** name), server version, key fingerprint, write tier, target, data date range |
+| `ab_list_budgets` | the budget files this install knows                                                                                 |
+| `ab_health`       | is the app up; if not, the exact command to bring it up. **Never starts it** (§9.8)                                 |
+| `ab_capabilities` | what this server build can actually do, so a missing feature is a sentence and not a 404                            |
 
 **Accounts (4, read)**
 
-| Tool                        | Answers                                                                  |
-| --------------------------- | ------------------------------------------------------------------------ |
+| Tool                        | Answers                                                                     |
+| --------------------------- | --------------------------------------------------------------------------- |
 | `ab_list_accounts`          | accounts with balances. `include_closed` false, `group_id`, `type`, `as_of` |
-| `ab_get_account`            | one account                                                              |
-| `ab_get_account_balance`    | one balance. `as_of`, `cleared_only`                                     |
-| `ab_get_account_properties` | transaction count, first and last transaction, cleared vs uncleared      |
+| `ab_get_account`            | one account                                                                 |
+| `ab_get_account_balance`    | one balance. `as_of`, `cleared_only`                                        |
+| `ab_get_account_properties` | transaction count, first and last transaction, cleared vs uncleared         |
 
 **Transactions (4, read)**
 
-| Tool                     | Answers                                                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| Tool                     | Answers                                                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ab_list_transactions`   | account(s) + date range, plus `category_id`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `uncategorized`, `transfer_only`, `order`, `limit`, `offset` |
-| `ab_get_transaction`     | one transaction, with its splits                                                                                         |
-| `ab_list_uncategorized`  | every transaction with no category, across accounts — the commonest real question                                        |
-| `ab_export_transactions` | the same filters, rendered as CSV, for a spreadsheet                                                                     |
+| `ab_get_transaction`     | one transaction, with its splits                                                                                                                                                                             |
+| `ab_list_uncategorized`  | every transaction with no category, across accounts — the commonest real question                                                                                                                            |
+| `ab_export_transactions` | the same filters, rendered as CSV, for a spreadsheet                                                                                                                                                         |
 
 **Categories and the budget (7, read)**
 
-| Tool                           | Answers                                                                                              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `ab_list_categories`           | with `include_hidden`, `group_id`                                                                    |
-| `ab_list_category_groups`      | the group tree                                                                                       |
-| `ab_list_budget_months`        | which months exist, and the data bounds                                                              |
-| `ab_get_budget_month`          | one month: `budgeted`, `spent`, `balance`, `carryover` per category, plus `to_budget` and the totals |
-| `ab_get_category_spend`        | one category across a range, from the app's own aggregation                                          |
-| `ab_list_budget_gaps`          | categories with spending and **no budget entry** — §10.2's rule, made into a tool                    |
-| `ab_check_budget_templates`    | parse every `#template` goal note and report every one that does not parse. Read-only                |
+| Tool                        | Answers                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `ab_list_categories`        | with `include_hidden`, `group_id`                                                                    |
+| `ab_list_category_groups`   | the group tree                                                                                       |
+| `ab_list_budget_months`     | which months exist, and the data bounds                                                              |
+| `ab_get_budget_month`       | one month: `budgeted`, `spent`, `balance`, `carryover` per category, plus `to_budget` and the totals |
+| `ab_get_category_spend`     | one category across a range, from the app's own aggregation                                          |
+| `ab_list_budget_gaps`       | categories with spending and **no budget entry** — §10.2's rule, made into a tool                    |
+| `ab_check_budget_templates` | parse every `#template` goal note and report every one that does not parse. Read-only                |
 
 **Reference data (6, read)**
 
-| Tool                          | Answers                                                             |
-| ----------------------------- | ------------------------------------------------------------------- |
-| `ab_list_payees`              | `search`, `include_transfer` false, `common`                        |
-| `ab_list_orphaned_payees`     | payees with no transactions and no rule — the cleanup list          |
-| `ab_list_tags`                | with `include_hidden`                                               |
-| `ab_list_rules`               | `stage`, `payee_id`, `search`                                       |
-| `ab_list_schedules`           | `include_completed`, `upcoming_days`                                |
-| `ab_list_upcoming_schedules`  | what is due, and when, across all schedules                         |
+| Tool                         | Answers                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `ab_list_payees`             | `search`, `include_transfer` false, `common`               |
+| `ab_list_orphaned_payees`    | payees with no transactions and no rule — the cleanup list |
+| `ab_list_tags`               | with `include_hidden`                                      |
+| `ab_list_rules`              | `stage`, `payee_id`, `search`                              |
+| `ab_list_schedules`          | `include_completed`, `upcoming_days`                       |
+| `ab_list_upcoming_schedules` | what is due, and when, across all schedules                |
 
 **Analytics (11, read) — where every total comes from**
 
@@ -928,19 +928,19 @@ model never adds two numbers together. Every one of these is an aggregation the 
 (apis.mdx §10). All take `start`, `end`, `account_ids`, `category_ids`, `include_offbudget` (false)
 and `include_transfers` (false), and every response echoes the filters it applied.
 
-| Tool                            | Answers                                                                         |
-| ------------------------------- | --------------------------------------------------------------------------------- |
-| `ab_spending_by_category`       | the breakdown, by `interval` and `group_by`, optionally `top_n`                  |
-| `ab_income_vs_expense`          | in, out, net, per interval                                                       |
-| `ab_cash_flow`                  | opening, in, out, closing, per interval                                          |
-| `ab_net_worth`                  | assets, liabilities, net, per interval and per account                           |
-| `ab_category_trend`             | one category over time, with its own mean and median                             |
-| `ab_payee_leaderboard`          | who got the money                                                                |
-| `ab_budget_performance`         | budgeted vs spent vs balance per category per month, and the variance            |
-| `ab_list_recurring`             | detected subscriptions **with their evidence** and an annualised cost            |
-| `ab_get_runway`                 | liquid on-budget balance ÷ trailing average outflow, in months, with the basis named |
-| `ab_get_uncategorized_summary`  | the count and total of uncategorised, by account and by month                    |
-| `ab_list_anomalies`             | categories and payees far from their own trailing norm, **with the deviation**   |
+| Tool                           | Answers                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| `ab_spending_by_category`      | the breakdown, by `interval` and `group_by`, optionally `top_n`                      |
+| `ab_income_vs_expense`         | in, out, net, per interval                                                           |
+| `ab_cash_flow`                 | opening, in, out, closing, per interval                                              |
+| `ab_net_worth`                 | assets, liabilities, net, per interval and per account                               |
+| `ab_category_trend`            | one category over time, with its own mean and median                                 |
+| `ab_payee_leaderboard`         | who got the money                                                                    |
+| `ab_budget_performance`        | budgeted vs spent vs balance per category per month, and the variance                |
+| `ab_list_recurring`            | detected subscriptions **with their evidence** and an annualised cost                |
+| `ab_get_runway`                | liquid on-budget balance ÷ trailing average outflow, in months, with the basis named |
+| `ab_get_uncategorized_summary` | the count and total of uncategorised, by account and by month                        |
+| `ab_list_anomalies`            | categories and payees far from their own trailing norm, **with the deviation**       |
 
 The last two rows of that table are detectors, not oracles, and their descriptions say so. They
 return evidence so the model can show its work instead of asserting a conclusion.
@@ -958,25 +958,25 @@ do not.
 
 **Statements and ingest (10, read)**
 
-| Tool                            | Answers                                                                              |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `ab_get_statement_manifest`     | what the archive says about itself: accounts, counts, date ranges, its own warnings   |
-| `ab_scan_statements`            | the tree, grouped and de-duplicated at the statement level                            |
-| `ab_list_missing_statements`    | which account-months have no statement                                                |
-| `ab_list_statement_duplicates`  | what both de-dupe layers collapsed, and the rule that collapsed each                  |
-| `ab_get_statement_rows`         | the staged rows for one account and range                                             |
-| `ab_describe_statement_map`     | the current statements→budget mapping, and what is unmapped                           |
-| `ab_extract_statements`         | raw mode only: PDF/sidecar → rows, into the staging directory                         |
-| `ab_plan_accounts`              | **§11.5** — create / link / ambiguous, per manifest row, with the reasoning           |
-| `ab_plan_statement_import`      | Actual's own dry run: new, already present, fuzzy matches — per account               |
-| `ab_plan_file_import`           | one file into one account — the "Import" button, previewed                            |
+| Tool                           | Answers                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| `ab_get_statement_manifest`    | what the archive says about itself: accounts, counts, date ranges, its own warnings |
+| `ab_scan_statements`           | the tree, grouped and de-duplicated at the statement level                          |
+| `ab_list_missing_statements`   | which account-months have no statement                                              |
+| `ab_list_statement_duplicates` | what both de-dupe layers collapsed, and the rule that collapsed each                |
+| `ab_get_statement_rows`        | the staged rows for one account and range                                           |
+| `ab_describe_statement_map`    | the current statements→budget mapping, and what is unmapped                         |
+| `ab_extract_statements`        | raw mode only: PDF/sidecar → rows, into the staging directory                       |
+| `ab_plan_accounts`             | **§11.5** — create / link / ambiguous, per manifest row, with the reasoning         |
+| `ab_plan_statement_import`     | Actual's own dry run: new, already present, fuzzy matches — per account             |
+| `ab_plan_file_import`          | one file into one account — the "Import" button, previewed                          |
 
 **Previews for writes (2, read)**
 
-| Tool                 | Answers                                                                                       |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `ab_preview_rule`    | which existing transactions a rule would match, **before** it is saved                         |
-| `ab_reconcile_plan`  | the engine's cleared balance vs the operator's figure, the difference, and the uncleared count |
+| Tool                | Answers                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `ab_preview_rule`   | which existing transactions a rule would match, **before** it is saved                         |
+| `ab_reconcile_plan` | the engine's cleared balance vs the operator's figure, the difference, and the uncleared count |
 
 These are read-tier on purpose. Authoring a rule and reconciling an account are the two places where
 a program most wants to see the consequence before committing, and neither preview needs the write
@@ -984,26 +984,26 @@ tier to be on — so the operator can do the thinking on a day when writes are o
 
 **The write tier (18, off by default)**
 
-| Tool                          | Changes                                                               |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| `ab_apply_accounts`           | creates the accounts a manifest needs, and writes the map (§11.5)      |
-| `ab_apply_statement_import`   | runs a plan through Actual's importer (§11.5)                          |
-| `ab_apply_file_import`        | imports one file into one account                                      |
-| `ab_add_transactions`         | adds transactions to one account                                       |
-| `ab_update_transaction`       | one transaction's fields, including its splits                         |
-| `ab_categorize_transactions`  | sets a category on a named set or a filter, under a ceiling            |
-| `ab_set_budget_amount`        | one category's budgeted amount, or its carryover, for one month        |
-| `ab_cover_overspending`       | moves money from one category to a category that went negative         |
-| `ab_transfer_category_budget` | moves budgeted money between two categories, or out of To Budget       |
-| `ab_copy_previous_budget`     | last month's budget into this one                                      |
-| `ab_set_budget_to_average`    | an N-month average into this month, for all or named categories        |
-| `ab_apply_goal_templates`     | applies the `#template` notes for a month                              |
-| `ab_add_rule`                 | creates a rule (after `ab_preview_rule`, which its description names)  |
-| `ab_run_rules`                | runs the rules engine over a named set or a filter, under a ceiling    |
-| `ab_merge_payees`             | collapses duplicate payees into one                                    |
+| Tool                          | Changes                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `ab_apply_accounts`           | creates the accounts a manifest needs, and writes the map (§11.5)                  |
+| `ab_apply_statement_import`   | runs a plan through Actual's importer (§11.5)                                      |
+| `ab_apply_file_import`        | imports one file into one account                                                  |
+| `ab_add_transactions`         | adds transactions to one account                                                   |
+| `ab_update_transaction`       | one transaction's fields, including its splits                                     |
+| `ab_categorize_transactions`  | sets a category on a named set or a filter, under a ceiling                        |
+| `ab_set_budget_amount`        | one category's budgeted amount, or its carryover, for one month                    |
+| `ab_cover_overspending`       | moves money from one category to a category that went negative                     |
+| `ab_transfer_category_budget` | moves budgeted money between two categories, or out of To Budget                   |
+| `ab_copy_previous_budget`     | last month's budget into this one                                                  |
+| `ab_set_budget_to_average`    | an N-month average into this month, for all or named categories                    |
+| `ab_apply_goal_templates`     | applies the `#template` notes for a month                                          |
+| `ab_add_rule`                 | creates a rule (after `ab_preview_rule`, which its description names)              |
+| `ab_run_rules`                | runs the rules engine over a named set or a filter, under a ceiling                |
+| `ab_merge_payees`             | collapses duplicate payees into one                                                |
 | `ab_reconcile_apply`          | marks the cleared set reconciled and, if asked, creates **one** visible adjustment |
-| `ab_sync`                     | syncs with the sync server                                             |
-| `ab_undo`                     | reverses the last change — **the most important write tool here**      |
+| `ab_sync`                     | syncs with the sync server                                                         |
+| `ab_undo`                     | reverses the last change — **the most important write tool here**                  |
 
 **`ab_undo` is not an afterthought.** An agent that can write must be an agent that can be
 un-written, and the tool exists so the answer to "that wasn't what I meant" is one call rather than
@@ -1011,15 +1011,15 @@ a support conversation. It is built in the same phase as the first write, never 
 
 **What this catalogue deliberately does NOT have**, stated as decisions rather than omissions:
 
-| Not here                                         | Because                                                                                       |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Not here                                         | Because                                                                                                                                                                                            |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Any `delete_` tool, of anything                  | Deleting the operator's financial records is a human act in a UI that can show them what is about to go. The machine plane has the routes, at the admin tier; this server is never given that tier |
-| `ab_create_account` as a standalone              | Accounts are created from a manifest plan (`ab_plan_accounts` → `ab_apply_accounts`) so the on-budget/off-budget decision is always explicit and always reviewed. A one-off account is a UI click |
-| `ab_link_bank_account`                           | An OAuth consent flow. A program driving it is a program phishing the operator (apis.mdx §8.8) |
-| Anything touching the encryption key or password | Changing it can lock the operator out of every device                                          |
-| `ab_load_budget`                                 | Switching the open budget changes what every other tool answers about. It is a footgun aimed at §3's whole problem, and it is a UI action |
-| `ab_rotate_key`                                  | §9.8                                                                                          |
-| `ab_delete_budget`, `ab_restore_backup`          | Admin tier. Not reachable from here by construction, not by policy                            |
+| `ab_create_account` as a standalone              | Accounts are created from a manifest plan (`ab_plan_accounts` → `ab_apply_accounts`) so the on-budget/off-budget decision is always explicit and always reviewed. A one-off account is a UI click  |
+| `ab_link_bank_account`                           | An OAuth consent flow. A program driving it is a program phishing the operator (apis.mdx §8.8)                                                                                                     |
+| Anything touching the encryption key or password | Changing it can lock the operator out of every device                                                                                                                                              |
+| `ab_load_budget`                                 | Switching the open budget changes what every other tool answers about. It is a footgun aimed at §3's whole problem, and it is a UI action                                                          |
+| `ab_rotate_key`                                  | §9.8                                                                                                                                                                                               |
+| `ab_delete_budget`, `ab_restore_backup`          | Admin tier. Not reachable from here by construction, not by policy                                                                                                                                 |
 
 ### 9.5a The catalogue is large, and that has a cost
 
@@ -1043,16 +1043,16 @@ that sometimes writes cannot honestly say what it costs.
 
 ### 9.6 Permutation matrix — every call shape that exists
 
-| Dimension    | Values                                                                                                                                                                                                                                                                                                                                                     |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tier         | read (50) · write (18) — 68 total, agreeing with §1, the Goal and §9. **`admin` is not a value**: this server is never given that tier, so no argument and no configuration can produce an admin call |
-| Target       | local (default) · remote (read-only, `https:` only, `ABMCP_ALLOW_REMOTE=1`)                                                                                                                                                                                                                                                                                |
-| Write tier   | server off (default) · server on + `ABMCP_ALLOW_WRITE=1`                                                                                                                                                                                                                                                                                                   |
-| Confirmation | not required (read) · `confirm` string echo required (write)                                                                                                                                                                                                                                                                                               |
-| Ceiling      | `max_changes` (write only; default 200; exceeding it refuses and reports the count)                                                                                                                                                                                                                                                                        |
-| Dry run      | `dry_run: true` **is the default on every write tool that has a meaningful dry run**, which is sixteen of the eighteen. **`ab_sync` and `ab_undo` have none**: a sync has nothing to preview and undo's preview *is* the thing itself, so neither takes a `dry_run` and neither schema offers one rather than accepting a flag it would ignore |
-| Truncation   | `truncated: true` + `limit_applied` whenever a cap bound the result                                                                                                                                                                                                                                                                                        |
-| Result       | `ok: true` + `data` · `ok: false` + `error` with `isError: true`                                                                                                                                                                                                                                                                                           |
+| Dimension    | Values                                                                                                                                                                                                                                                                                                                                         |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tier         | read (50) · write (18) — 68 total, agreeing with §1, the Goal and §9. **`admin` is not a value**: this server is never given that tier, so no argument and no configuration can produce an admin call                                                                                                                                          |
+| Target       | local (default) · remote (read-only, `https:` only, `ABMCP_ALLOW_REMOTE=1`)                                                                                                                                                                                                                                                                    |
+| Write tier   | server off (default) · server on + `ABMCP_ALLOW_WRITE=1`                                                                                                                                                                                                                                                                                       |
+| Confirmation | not required (read) · `confirm` string echo required (write)                                                                                                                                                                                                                                                                                   |
+| Ceiling      | `max_changes` (write only; default 200; exceeding it refuses and reports the count)                                                                                                                                                                                                                                                            |
+| Dry run      | `dry_run: true` **is the default on every write tool that has a meaningful dry run**, which is sixteen of the eighteen. **`ab_sync` and `ab_undo` have none**: a sync has nothing to preview and undo's preview _is_ the thing itself, so neither takes a `dry_run` and neither schema offers one rather than accepting a flag it would ignore |
+| Truncation   | `truncated: true` + `limit_applied` whenever a cap bound the result                                                                                                                                                                                                                                                                            |
+| Result       | `ok: true` + `data` · `ok: false` + `error` with `isError: true`                                                                                                                                                                                                                                                                               |
 
 A shape not in this table does not exist. In particular: there is no write that skips the confirm,
 no write against a remote target, and no unlimited result.
@@ -1156,21 +1156,21 @@ about to spend twenty minutes re-deriving something it already has.
 
 ### 11.1 The tools
 
-| Tool                           | Tier          | What it does                                                                                                                                                                |
-| ------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ab_get_statement_manifest`    | read          | **call this first.** What the archive says about itself: mode, accounts, transaction counts, date ranges, and its own warnings (unreconciled statements, aggregate-only sources) |
+| Tool                           | Tier          | What it does                                                                                                                                                                        |
+| ------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ab_get_statement_manifest`    | read          | **call this first.** What the archive says about itself: mode, accounts, transaction counts, date ranges, and its own warnings (unreconciled statements, aggregate-only sources)    |
 | `ab_scan_statements`           | read          | walks the configured statements root; returns entity/institution/account/period groups with counts, and flags missing months, duplicate scans and unreadable files. Changes nothing |
-| `ab_list_missing_statements`   | read          | just the gaps, as `{entity, institution, account, period}` records                                                                                                          |
-| `ab_extract_statements`        | read (budget) | **raw mode only.** Turns PDFs and their sidecars into rows in the staging directory. Never touches the budget, and never writes into the operator's archive                  |
-| `ab_list_statement_duplicates` | read          | every group with more than one member, the verdict, **and the rule that decided it**                                                                                        |
-| `ab_get_statement_rows`        | read          | the de-duplicated rows for one account-month. Parsed rows only — **never the raw statement text** (§7.4)                                                                    |
-| `ab_describe_statement_map`    | read          | the map file that connects the tree to budget accounts, and which mappings currently resolve                                                                                |
-| `ab_plan_accounts`             | read          | create / link / ambiguous per manifest row, with the reasoning and the on-budget decision (§11.4)                                                                           |
-| `ab_apply_accounts`            | **write**     | creates them in one batch and writes the map                                                                                                                                |
-| `ab_plan_statement_import`     | read          | the full plan: extracted, after de-dupe, already present, fuzzy matches, new. Returns a `confirm_token`. Changes nothing                                                    |
-| `ab_apply_statement_import`    | **write**     | runs the plan through the app's importer                                                                                                                                    |
-| `ab_plan_file_import`          | read          | one file into one account — the UI's "Import" button, previewed                                                                                                             |
-| `ab_apply_file_import`         | **write**     | …and applied                                                                                                                                                                |
+| `ab_list_missing_statements`   | read          | just the gaps, as `{entity, institution, account, period}` records                                                                                                                  |
+| `ab_extract_statements`        | read (budget) | **raw mode only.** Turns PDFs and their sidecars into rows in the staging directory. Never touches the budget, and never writes into the operator's archive                         |
+| `ab_list_statement_duplicates` | read          | every group with more than one member, the verdict, **and the rule that decided it**                                                                                                |
+| `ab_get_statement_rows`        | read          | the de-duplicated rows for one account-month. Parsed rows only — **never the raw statement text** (§7.4)                                                                            |
+| `ab_describe_statement_map`    | read          | the map file that connects the tree to budget accounts, and which mappings currently resolve                                                                                        |
+| `ab_plan_accounts`             | read          | create / link / ambiguous per manifest row, with the reasoning and the on-budget decision (§11.4)                                                                                   |
+| `ab_apply_accounts`            | **write**     | creates them in one batch and writes the map                                                                                                                                        |
+| `ab_plan_statement_import`     | read          | the full plan: extracted, after de-dupe, already present, fuzzy matches, new. Returns a `confirm_token`. Changes nothing                                                            |
+| `ab_apply_statement_import`    | **write**     | runs the plan through the app's importer                                                                                                                                            |
+| `ab_plan_file_import`          | read          | one file into one account — the UI's "Import" button, previewed                                                                                                                     |
+| `ab_apply_file_import`         | **write**     | …and applied                                                                                                                                                                        |
 
 **The archive is read-only, and the model is told so in three separate tool descriptions.** It is
 audit evidence. Nothing in this catalogue writes into it; the only filesystem writes are into a
@@ -1510,74 +1510,74 @@ They are grouped by what the operator is really doing, because that is how the i
 
 **Getting started — the first evening**
 
-| They type                                                       | Sequence                                                                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| "set up my budget from my bank statements"                      | `ab_whoami` → `ab_get_statement_manifest` → `ab_plan_accounts` → **stop** → `ab_apply_accounts` → `ab_plan_statement_import` → **stop** → `ab_apply_statement_import` → verify |
-| "what's in my statement archive?"                               | `ab_get_statement_manifest` — answered without touching the budget at all                                     |
-| "which months am I missing statements for?"                     | `ab_list_missing_statements`                                                                                  |
-| "import the files I downloaded from my bank this morning"         | `ab_plan_file_import` → `ab_apply_file_import`                                                                |
-| "did that import actually work?"                                | `ab_get_account_properties` per account + `ab_get_uncategorized_summary`                                       |
-| "start me a budget for next month"                              | `ab_list_budget_months` → `ab_get_budget_month` → `ab_set_budget_to_average` (dry run) → apply                |
+| They type                                                 | Sequence                                                                                                                                                                       |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "set up my budget from my bank statements"                | `ab_whoami` → `ab_get_statement_manifest` → `ab_plan_accounts` → **stop** → `ab_apply_accounts` → `ab_plan_statement_import` → **stop** → `ab_apply_statement_import` → verify |
+| "what's in my statement archive?"                         | `ab_get_statement_manifest` — answered without touching the budget at all                                                                                                      |
+| "which months am I missing statements for?"               | `ab_list_missing_statements`                                                                                                                                                   |
+| "import the files I downloaded from my bank this morning" | `ab_plan_file_import` → `ab_apply_file_import`                                                                                                                                 |
+| "did that import actually work?"                          | `ab_get_account_properties` per account + `ab_get_uncategorized_summary`                                                                                                       |
+| "start me a budget for next month"                        | `ab_list_budget_months` → `ab_get_budget_month` → `ab_set_budget_to_average` (dry run) → apply                                                                                 |
 
 **Understanding where the money went — the daily bread**
 
-| They type                                                       | Sequence                                                                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| "where did my money go last month?"                             | `ab_spending_by_category` + `ab_payee_leaderboard`                                                            |
-| "where is my money going?" (no period)                           | resolve to the last full month, **say so**, then as above                                                     |
-| "how much do I spend on groceries, really?"                     | `ab_category_trend` — the mean and median matter more than any single month                                   |
-| "what did I spend at Amazon this year?"                         | `ab_payee_leaderboard` scoped, or `ab_list_transactions` with `payee_id`                                       |
-| "am I spending more than last year?"                            | `ab_income_vs_expense` over both, `interval=year`                                                             |
-| "what subscriptions am I paying for?"                           | `ab_list_recurring` — reported with its evidence, never as a bare claim                                       |
-| "am I paying for anything twice?"                               | `ab_list_recurring` + `ab_payee_leaderboard`; duplicates surface as two near-identical recurring items        |
-| "did my net worth go up this year?"                             | `ab_net_worth`, `interval=month`, with the market-movement caveat stated                                      |
-| "how's my cash flow?"                                           | `ab_cash_flow`                                                                                                |
-| "anything weird this month?"                                    | `ab_list_anomalies` + `ab_list_budget_gaps` + `ab_get_uncategorized_summary`                                  |
-| "why is my utilities bill so high?"                             | `ab_get_budget_month` → `ab_category_trend` → `ab_list_transactions` sorted by amount                         |
-| "what's my biggest expense I'm not thinking about?"             | `ab_spending_by_category` with `top_n`, then `ab_category_trend` on the surprise                              |
-| "how long could I last if I stopped working?"                   | `ab_get_runway`, with the basis and the assumption said out loud                                              |
-| "show me every transaction over $500 since June"                | `ab_list_transactions` with `min_amount` and `start`                                                          |
-| "what did I spend on the trip in August?"                       | `ab_list_transactions` with `tag` if they tag, otherwise date range + `ab_spending_by_category`                |
+| They type                                           | Sequence                                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| "where did my money go last month?"                 | `ab_spending_by_category` + `ab_payee_leaderboard`                                                     |
+| "where is my money going?" (no period)              | resolve to the last full month, **say so**, then as above                                              |
+| "how much do I spend on groceries, really?"         | `ab_category_trend` — the mean and median matter more than any single month                            |
+| "what did I spend at Amazon this year?"             | `ab_payee_leaderboard` scoped, or `ab_list_transactions` with `payee_id`                               |
+| "am I spending more than last year?"                | `ab_income_vs_expense` over both, `interval=year`                                                      |
+| "what subscriptions am I paying for?"               | `ab_list_recurring` — reported with its evidence, never as a bare claim                                |
+| "am I paying for anything twice?"                   | `ab_list_recurring` + `ab_payee_leaderboard`; duplicates surface as two near-identical recurring items |
+| "did my net worth go up this year?"                 | `ab_net_worth`, `interval=month`, with the market-movement caveat stated                               |
+| "how's my cash flow?"                               | `ab_cash_flow`                                                                                         |
+| "anything weird this month?"                        | `ab_list_anomalies` + `ab_list_budget_gaps` + `ab_get_uncategorized_summary`                           |
+| "why is my utilities bill so high?"                 | `ab_get_budget_month` → `ab_category_trend` → `ab_list_transactions` sorted by amount                  |
+| "what's my biggest expense I'm not thinking about?" | `ab_spending_by_category` with `top_n`, then `ab_category_trend` on the surprise                       |
+| "how long could I last if I stopped working?"       | `ab_get_runway`, with the basis and the assumption said out loud                                       |
+| "show me every transaction over $500 since June"    | `ab_list_transactions` with `min_amount` and `start`                                                   |
+| "what did I spend on the trip in August?"           | `ab_list_transactions` with `tag` if they tag, otherwise date range + `ab_spending_by_category`        |
 
 **Keeping the books straight — the weekly hour**
 
-| They type                                                       | Sequence                                                                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| "what haven't I categorised?"                                   | `ab_get_uncategorized_summary` → `ab_list_uncategorized` grouped by payee                                     |
-| "categorise all the Whole Foods ones as Groceries"              | `ab_preview_rule` → **stop** → `ab_add_rule` → `ab_run_rules` (dry run) → apply                               |
-| "just fix these five"                                           | `ab_categorize_transactions` with explicit ids, previewed                                                     |
-| "my payee list is a mess"                                       | `ab_list_payees` → `ab_list_orphaned_payees` → `ab_merge_payees` (dry run) → apply                            |
-| "reconcile my checking — it says $4,211.08"               | `ab_reconcile_plan` → if non-zero, **hunt the difference first** → only then `ab_reconcile_apply`             |
-| "these two are the same transaction"                            | `ab_get_transaction` ×2 → the merge tool, previewed                                                           |
-| "split that grocery run — half was for the office"              | `ab_get_transaction` → `ab_update_transaction` with `subtransactions`                                         |
-| "what rules do I have?"                                         | `ab_list_rules`                                                                                               |
-| "would this rule break anything?"                               | `ab_preview_rule` — the entire reason it is read-tier                                                         |
-| "what's coming up?"                                             | `ab_list_upcoming_schedules`                                                                                  |
+| They type                                          | Sequence                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| "what haven't I categorised?"                      | `ab_get_uncategorized_summary` → `ab_list_uncategorized` grouped by payee                         |
+| "categorise all the Whole Foods ones as Groceries" | `ab_preview_rule` → **stop** → `ab_add_rule` → `ab_run_rules` (dry run) → apply                   |
+| "just fix these five"                              | `ab_categorize_transactions` with explicit ids, previewed                                         |
+| "my payee list is a mess"                          | `ab_list_payees` → `ab_list_orphaned_payees` → `ab_merge_payees` (dry run) → apply                |
+| "reconcile my checking — it says $4,211.08"        | `ab_reconcile_plan` → if non-zero, **hunt the difference first** → only then `ab_reconcile_apply` |
+| "these two are the same transaction"               | `ab_get_transaction` ×2 → the merge tool, previewed                                               |
+| "split that grocery run — half was for the office" | `ab_get_transaction` → `ab_update_transaction` with `subtransactions`                             |
+| "what rules do I have?"                            | `ab_list_rules`                                                                                   |
+| "would this rule break anything?"                  | `ab_preview_rule` — the entire reason it is read-tier                                             |
+| "what's coming up?"                                | `ab_list_upcoming_schedules`                                                                      |
 
 **Budgeting — the monthly ritual**
 
-| They type                                                       | Sequence                                                                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| "build next month's budget from the last six months"            | `ab_get_budget_month` ×2 → `ab_list_budget_gaps` → `ab_set_budget_to_average` (dry run) → apply → check To Budget |
-| "same as last month"                                            | `ab_copy_previous_budget`, previewed                                                                          |
-| "I overspent dining — cover it from fun money"                  | `ab_get_budget_month` → `ab_cover_overspending`                                                               |
-| "move $200 from travel to home repair"                          | `ab_transfer_category_budget`                                                                                 |
-| "I have money left over — put it in savings"                    | `ab_get_budget_month` (read To Budget) → `ab_transfer_category_budget`                                        |
-| "what am I spending on that I never budgeted for?"              | `ab_list_budget_gaps` — the §10.2 rule as a single answer                                                     |
-| "am I hitting my budget?"                                       | `ab_budget_performance` over the months                                                                       |
-| "apply my goal templates"                                       | `ab_check_budget_templates` → `ab_apply_goal_templates` (dry run) → apply                                      |
-| "why doesn't my budget add up?"                                 | `ab_get_budget_month` — usually a negative To Budget, which is the headline, not a footnote                   |
-| "set everything to zero and let me start again"                 | a write with a large blast radius: preview, count, **confirm explicitly**, then apply                         |
+| They type                                            | Sequence                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| "build next month's budget from the last six months" | `ab_get_budget_month` ×2 → `ab_list_budget_gaps` → `ab_set_budget_to_average` (dry run) → apply → check To Budget |
+| "same as last month"                                 | `ab_copy_previous_budget`, previewed                                                                              |
+| "I overspent dining — cover it from fun money"       | `ab_get_budget_month` → `ab_cover_overspending`                                                                   |
+| "move $200 from travel to home repair"               | `ab_transfer_category_budget`                                                                                     |
+| "I have money left over — put it in savings"         | `ab_get_budget_month` (read To Budget) → `ab_transfer_category_budget`                                            |
+| "what am I spending on that I never budgeted for?"   | `ab_list_budget_gaps` — the §10.2 rule as a single answer                                                         |
+| "am I hitting my budget?"                            | `ab_budget_performance` over the months                                                                           |
+| "apply my goal templates"                            | `ab_check_budget_templates` → `ab_apply_goal_templates` (dry run) → apply                                         |
+| "why doesn't my budget add up?"                      | `ab_get_budget_month` — usually a negative To Budget, which is the headline, not a footnote                       |
+| "set everything to zero and let me start again"      | a write with a large blast radius: preview, count, **confirm explicitly**, then apply                             |
 
 **When it goes wrong**
 
-| They type                                                       | What happens                                                                                                 |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| "undo that"                                                     | `ab_undo`, and the model reports **what** was undone rather than just "done"                                  |
-| "that number's wrong"                                           | the model shows the rows behind it and the filters it applied — never re-derives the number a second way      |
-| "why is that different from what the app shows?"                | `ab_whoami` first: nine times in ten it is a different budget or a different date range, and both are in `meta` |
-| "did you change anything?"                                      | the model can answer from the session; the durable answer is the audit file, and it says so                   |
-| "that imported into the wrong account"                          | `ab_undo` if it was the last thing; otherwise the honest answer is that unwinding an import is a UI job       |
+| They type                                        | What happens                                                                                                    |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| "undo that"                                      | `ab_undo`, and the model reports **what** was undone rather than just "done"                                    |
+| "that number's wrong"                            | the model shows the rows behind it and the filters it applied — never re-derives the number a second way        |
+| "why is that different from what the app shows?" | `ab_whoami` first: nine times in ten it is a different budget or a different date range, and both are in `meta` |
+| "did you change anything?"                       | the model can answer from the session; the durable answer is the audit file, and it says so                     |
+| "that imported into the wrong account"           | `ab_undo` if it was the last thing; otherwise the honest answer is that unwinding an import is a UI job         |
 
 ### 18.2 The three shapes that are not allowed
 
@@ -1587,7 +1587,7 @@ Recorded here because each one is a plausible-looking sequence that must never a
    the total the operator wants has no tool, the correct output is _"there's no route for that yet"_
    plus the closest thing — never a sum.
 2. **A write with no preview shown to the operator.** The token makes it technically impossible to
-   write without *fetching* a preview; it cannot make the model *show* one. That is the payload's
+   write without _fetching_ a preview; it cannot make the model _show_ one. That is the payload's
    job (§8.3), it is stated three times there, and it is what UC-6's two stop points are.
 3. **Chaining a second write off a first without reporting.** Each write is reported and verified
    before the next is proposed. An agent that applies four writes and then summarises has removed
@@ -1608,10 +1608,10 @@ Recorded here because each one is a plausible-looking sequence that must never a
 6. The built bundle contains no host literal other than loopback, and no `child_process` import.
 7. Every one of the 68 tools carries all four description clauses; every name matches `^ab_[a-z_]+$`;
    `tools/list` and dispatch agree in both directions.
-7a. **Every tool maps to exactly one route in [apis.mdx](./apis.mdx)**, and every route that spec's
+   7a. **Every tool maps to exactly one route in [apis.mdx](./apis.mdx)**, and every route that spec's
    §9 coverage matrix marks ✅ either has a tool or appears in §9.5's omissions table with a reason.
    Asserted from a committed fixture, in both directions.
-7b. **Every `ab_` name mentioned in `ai/mcp_prompt.md` exists in the catalogue** (§8.3).
+   7b. **Every `ab_` name mentioned in `ai/mcp_prompt.md` exists in the catalogue** (§8.3).
 8. With the write tier off, all 18 write tools are **listed**, and every call to one returns
    `write_disabled` naming both switches.
 9. With both switches on, a write without a `confirm` token returns `confirm_required`; with a stale
@@ -1639,12 +1639,12 @@ Recorded here because each one is a plausible-looking sequence that must never a
     is never re-added by any tool call (§11.3).
 21. `ab_sync` and `ab_undo` have no `dry_run` field in their schemas; the other sixteen write tools
     default it to `true` (§9.6).
-21a. No analytics tool returns a float, a percentage or a ratio; a share is returned as its two
+    21a. No analytics tool returns a float, a percentage or a ratio; a share is returned as its two
     integers and the rendering layer divides.
-21b. `ab_plan_accounts` over a fixture manifest containing two accounts that share a last-four
+    21b. `ab_plan_accounts` over a fixture manifest containing two accounts that share a last-four
     across two entities returns exactly one `ambiguous` and zero silent creates; run again after
     `ab_apply_accounts`, every row is `link`.
-21c. `ab_undo` after every write tool restores the budget to a byte-identical state, asserted by a
+    21c. `ab_undo` after every write tool restores the budget to a byte-identical state, asserted by a
     full-table hash.
 22. The error vocabulary here is a strict superset of the machine plane's nine
     ([cli.mdx §5.3](./cli.mdx)), and the three extra codes are never produced by a route.
@@ -1653,19 +1653,19 @@ Recorded here because each one is a plausible-looking sequence that must never a
 
 ## 20. Build phases
 
-| Phase                              | Ships                                                                                                              | Done when        |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| **P1 — the spine**                 | `mcp/` layout, stdio transport, `Server` + explicit handlers, logger, banner, the two purity canaries, `ab_whoami` | AC 1, 4, 5, 6    |
-| **P2 — the key and the gates**     | `credentials.ts`, the six gates, `ab_health`, the refuse-to-start paths                                            | AC 2, 3          |
-| **P3 — the instructions pipeline** | `ai/mcp_prompt.md`, the build-time generator, the freshness test, the `ABMCP_PROMPT_FILE` override, the routing redirects | AC 4, 13, 7b |
-| **P4 — the read catalogue**        | orientation, accounts, transactions, categories, budget, reference data — 25 tools                                 | AC 7, 10, 11, 12 |
-| **P5 — the analytics family**      | all 11. **This is the phase that makes the server useful**, and it is deliberately before writes                  | AC 21a           |
-| **P6 — the query hatch**           | `ab_query`, `ab_describe_schema`, the server-side guard                                                            | T4               |
-| **P7 — statements, read**          | the ten read ingest tools, including `ab_get_statement_manifest` and `ab_plan_accounts`                            | AC 14, 15, 21b   |
-| **P8 — the write tier**            | the confirm protocol, then `ab_apply_accounts`, `ab_apply_statement_import`, `ab_sync` and **`ab_undo`** — undo ships with the first write, never later | AC 8, 9, 21c |
-| **P9 — the budget writers**        | `ab_set_budget_amount`, cover, transfer, copy, averages, goal templates                                            | AC 8, 9          |
-| **P10 — the bookkeeping writers**  | rules (`ab_preview_rule` first), categorize, merge payees, reconcile, transaction edits                            | AC 8, 9          |
-| **P11 — hardening**                | the audit line and its PII rules, every remaining canary, the full integration suite                               | AC 16, 17        |
+| Phase                              | Ships                                                                                                                                                   | Done when        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| **P1 — the spine**                 | `mcp/` layout, stdio transport, `Server` + explicit handlers, logger, banner, the two purity canaries, `ab_whoami`                                      | AC 1, 4, 5, 6    |
+| **P2 — the key and the gates**     | `credentials.ts`, the six gates, `ab_health`, the refuse-to-start paths                                                                                 | AC 2, 3          |
+| **P3 — the instructions pipeline** | `ai/mcp_prompt.md`, the build-time generator, the freshness test, the `ABMCP_PROMPT_FILE` override, the routing redirects                               | AC 4, 13, 7b     |
+| **P4 — the read catalogue**        | orientation, accounts, transactions, categories, budget, reference data — 25 tools                                                                      | AC 7, 10, 11, 12 |
+| **P5 — the analytics family**      | all 11. **This is the phase that makes the server useful**, and it is deliberately before writes                                                        | AC 21a           |
+| **P6 — the query hatch**           | `ab_query`, `ab_describe_schema`, the server-side guard                                                                                                 | T4               |
+| **P7 — statements, read**          | the ten read ingest tools, including `ab_get_statement_manifest` and `ab_plan_accounts`                                                                 | AC 14, 15, 21b   |
+| **P8 — the write tier**            | the confirm protocol, then `ab_apply_accounts`, `ab_apply_statement_import`, `ab_sync` and **`ab_undo`** — undo ships with the first write, never later | AC 8, 9, 21c     |
+| **P9 — the budget writers**        | `ab_set_budget_amount`, cover, transfer, copy, averages, goal templates                                                                                 | AC 8, 9          |
+| **P10 — the bookkeeping writers**  | rules (`ab_preview_rule` first), categorize, merge payees, reconcile, transaction edits                                                                 | AC 8, 9          |
+| **P11 — hardening**                | the audit line and its PII rules, every remaining canary, the full integration suite                                                                    | AC 16, 17        |
 
 P1–P3 are the ones that must be right. A server whose stdout is clean, whose key is refused when it
 should be, and whose routing sentence reaches the model is a server whose later tools are ordinary.
@@ -1694,12 +1694,12 @@ its own. Everything after it is additive. Ship there, then keep going.
    cutoff.
 9. Writes need the server's tier **and** this side's switch **and** a `confirm` token from a `plan_`
    call or a dry run, and are bounded by `max_changes`; `dry_run` is the default.
-9a. Every tool is exactly one route in [apis.mdx](./apis.mdx). A tool that would need a second call
-    is two tools or one new route — never a fan-out here.
-9b. This server is never granted the admin tier, and no argument or configuration can produce an
-    admin call.
+   9a. Every tool is exactly one route in [apis.mdx](./apis.mdx). A tool that would need a second call
+   is two tools or one new route — never a fan-out here.
+   9b. This server is never granted the admin tier, and no argument or configuration can produce an
+   admin call.
 10. There is no tool that deletes a transaction, an account, a category, a rule or a schedule.
-10a. `ab_undo` exists, ships in the same phase as the first write tool, and reports **what** it
+    10a. `ab_undo` exists, ships in the same phase as the first write tool, and reports **what** it
     undid rather than only that it succeeded.
 11. De-duplication is the server's and deterministic; **`importTransactions` is the sole authority on
     what already exists**; no tool lets the model override it or judge a duplicate. `plan_` is that

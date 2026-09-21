@@ -87,8 +87,11 @@ describe('no-network canary (§7.0 T9)', () => {
   });
 
   it('exactly one of OUR modules opens a socket', () => {
+    // A bare global `fetch(` — not `.fetch(`, not `#fetch(`, which are method
+    // names and open nothing. The point is which module can reach the
+    // network, not which module happens to use the word.
     const fetchers = walk(srcDir, '.ts').filter(file =>
-      /\bfetch\s*\(/.test(fs.readFileSync(file, 'utf8')),
+      /(?<![.#\w])fetch\s*\(/.test(fs.readFileSync(file, 'utf8')),
     );
     expect(fetchers.map(f => path.basename(f))).toEqual(['client.ts']);
   });
@@ -226,7 +229,7 @@ describe('open-source safety (cli.mdx §17)', () => {
     }
   });
 
-  it('never reads a human credential or another product\'s state', () => {
+  it("never reads a human credential or another product's state", () => {
     for (const file of walk(srcDir, '.ts')) {
       const source = fs.readFileSync(file, 'utf8');
       for (const forbidden of [

@@ -132,7 +132,7 @@ export const updateTransaction: ToolDef = {
     what: 'Updates fields on one existing transaction — its category, notes, payee, cleared state or amount in integer cents.',
     tier: 'write',
     insteadOf:
-      'To see the transaction first, use ab_get_transaction. There is no tool to delete one; that is the operator\'s to do in the app.',
+      "To see the transaction first, use ab_get_transaction. There is no tool to delete one; that is the operator's to do in the app.",
   }),
   inputSchema: {
     type: 'object',
@@ -240,7 +240,7 @@ export const sync: ToolDef = {
   route: { method: 'POST', path: '/sync' },
   tier: 'write',
   description: describe({
-    what: 'Syncs this budget with the operator\'s sync server, pushing local changes and pulling any made on their other devices.',
+    what: "Syncs this budget with the operator's sync server, pushing local changes and pulling any made on their other devices.",
     tier: 'write',
     insteadOf:
       'Run this after a write if the operator wants the change on their phone immediately.',

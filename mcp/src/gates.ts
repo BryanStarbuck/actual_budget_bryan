@@ -63,7 +63,7 @@ export function checkInput<T>(tool: ToolDef, args: unknown): T {
     throw fail(
       'invalid_input',
       where === '' ? detail : `${where}: ${detail}`,
-      'check the tool\'s input schema and retry with corrected arguments',
+      "check the tool's input schema and retry with corrected arguments",
     );
   }
   return parsed.data as T;

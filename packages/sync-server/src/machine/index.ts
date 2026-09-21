@@ -31,6 +31,10 @@
  * The ROUTE TABLE is one array (§6.3). The router below and `/capabilities`
  * are both built from it, so the server cannot describe itself incorrectly.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import express from 'express';
 import type { Request, Response } from 'express';
 
@@ -68,12 +72,43 @@ export const ROUTES: readonly AnyRouteDef[] = [
 
 const SERVER_VERSION = readServerVersion();
 
+/**
+ * The server's own version, for `meta.serverVersion` on every response.
+ *
+ * `npm_package_version` is ONLY set when a package manager started the
+ * process. The server also runs as a plain `node build/app.js` — which is what
+ * the Docker image does — and there it is undefined, so relying on it alone
+ * reports "unknown" in exactly the deployment an operator is most likely to be
+ * debugging remotely.
+ *
+ * So we walk up for our own package.json, the same way app.ts's /info does,
+ * and check the NAME as well: the nearest package.json to a bundled file is
+ * not necessarily ours, and reporting a dependency's version would be worse
+ * than reporting nothing.
+ */
 function readServerVersion(): string {
-  // `npm_package_version` is only set when the process was started by a
-  // package manager script. The server is also started as `node build/app.js`
-  // (which is what `just server-bg` does through yarn, and what the Docker
-  // image does directly), so this has to degrade to something honest rather
-  // than claiming a version it does not know.
+  try {
+    let dir = path.resolve(fileURLToPath(import.meta.url), '..');
+    for (let depth = 0; depth < 6; depth += 1) {
+      const candidate = path.join(dir, 'package.json');
+      if (fs.existsSync(candidate)) {
+        const pkg = JSON.parse(fs.readFileSync(candidate, 'utf8')) as {
+          name?: string;
+          version?: string;
+        };
+        if (pkg.name === '@actual-app/sync-server' && pkg.version) {
+          return pkg.version;
+        }
+      }
+      const parent = path.resolve(dir, '..');
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
+    }
+  } catch {
+    // Fall through — a version is a nicety and must never stop the plane.
+  }
   return process.env.npm_package_version ?? 'unknown';
 }
 

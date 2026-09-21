@@ -21,7 +21,7 @@ export const listCategories: ToolDef = {
   route: { method: 'GET', path: '/categories' },
   tier: 'read',
   description: describe({
-    what: 'Lists the operator\'s budget categories with their ids, names and group membership.',
+    what: "Lists the operator's budget categories with their ids, names and group membership.",
     tier: 'read',
   }),
   inputSchema: NO_ARGS,
@@ -72,7 +72,7 @@ export const getBudgetMonth: ToolDef = {
     what: 'Gets one budget month: per category, the amount budgeted, spent, the balance and any carryover, all in integer cents. A category with no budget entry returns budgeted: null, which means "not budgeted" and is DIFFERENT from budgeted: 0, which means the operator deliberately budgeted nothing.',
     tier: 'read',
     insteadOf:
-      'Use this rather than summing ab_list_transactions — this is the app\'s own aggregation.',
+      "Use this rather than summing ab_list_transactions — this is the app's own aggregation.",
   }),
   inputSchema: {
     type: 'object',

@@ -37,6 +37,9 @@ const VERBS: Verb[] = [
   orientation.logs,
   orientation.key,
   orientation.ping,
+  orientation.whoami,
+  orientation.capabilities,
+  orientation.health,
 ];
 
 function repoRoot(): string {

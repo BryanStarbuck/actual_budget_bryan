@@ -64,7 +64,7 @@ describe('naming (§9.1, §3.2)', () => {
     }
   });
 
-  it('no tool name collides with a neighbour\'s bare name', () => {
+  it("no tool name collides with a neighbour's bare name", () => {
     // §3.3 — the names both neighbours already occupy. The ab_ prefix is what
     // survives a model losing the server segment entirely.
     const taken = [
@@ -188,7 +188,7 @@ describe('the error vocabulary (§12.3)', () => {
     expect(ERROR_CODES).toHaveLength(12);
   });
 
-  it('is a strict superset of the machine plane\'s nine', () => {
+  it("is a strict superset of the machine plane's nine", () => {
     // So a server error can pass through unchanged (cli.mdx §5.3).
     for (const code of PLANE_CODES) {
       expect(ERROR_CODES).toContain(code);

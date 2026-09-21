@@ -268,7 +268,7 @@ export const applyStatementImport: ToolDef = {
   route: { method: 'POST', path: '/statements/apply' },
   tier: 'write',
   description: describe({
-    what: 'Runs a statement import plan through the budget application\'s own importer, adding the new transactions.',
+    what: "Runs a statement import plan through the budget application's own importer, adding the new transactions.",
     tier: 'write',
     insteadOf:
       'Run ab_plan_statement_import first and show the operator the plan; this tool requires the confirm_token that call returned. The plan is recomputed here, and if it has changed since, this refuses rather than importing something the operator did not see.',

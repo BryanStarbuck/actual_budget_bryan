@@ -161,12 +161,9 @@ async function start(env: NodeJS.ProcessEnv): Promise<EngineLib> {
   status = 'starting';
 
   const loaded = await loadApi();
-  if (loaded === null) {
+  if ('error' in loaded) {
     status = 'unavailable';
-    failure = {
-      error: '@actual-app/api is not installed in this deployment.',
-      hint: 'run `just build` in the repo, or install the package alongside the server',
-    };
+    failure = loaded;
     throw new MachineError('not_ready', failure.error, failure.hint);
   }
   api = loaded;
@@ -192,19 +189,55 @@ async function start(env: NodeJS.ProcessEnv): Promise<EngineLib> {
 }
 
 /**
- * Load `@actual-app/api` if it is there; return null if it is not.
+ * Load `@actual-app/api`, distinguishing "not installed" from "failed to
+ * load".
  *
  * The specifier is held in a variable so bundlers treat it as external rather
  * than trying to resolve it at build time — the package is intentionally
  * absent from some deployments and a build-time resolution failure would be a
  * broken server rather than a disabled feature.
+ *
+ * THE TWO CASES ARE REPORTED DIFFERENTLY, and conflating them cost real time
+ * the first day this ran: a blanket `catch { return null }` reports "not
+ * installed in this deployment" for EVERY failure, so a package that is
+ * installed but whose `dist/` was never built — which is what a stale lage
+ * cache produces — sends the operator to install something they already have.
+ * §5.4 says a hint must name the actual fix, and a hint that names the wrong
+ * one is worse than none.
  */
-async function loadApi(): Promise<EngineApi | null> {
+type ApiLoadFailure = { error: string; hint: string };
+
+async function loadApi(): Promise<EngineApi | ApiLoadFailure> {
   const specifier = '@actual-app/api';
   try {
     return (await import(/* @vite-ignore */ specifier)) as EngineApi;
-  } catch {
-    return null;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    const message = (err as Error).message.split('\n')[0];
+
+    // Resolution failed. Either the package is genuinely absent (a production
+    // install, which has no devDependencies) or it is present but unbuilt.
+    if (
+      code === 'ERR_MODULE_NOT_FOUND' ||
+      code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
+    ) {
+      const unbuilt = message.includes('/dist/');
+      return {
+        error: unbuilt
+          ? '@actual-app/api is installed but has not been built.'
+          : '@actual-app/api is not installed in this deployment.',
+        hint: unbuilt
+          ? 'run `rm -rf .lage && yarn workspace @actual-app/api build` — a stale lage cache reports the build as skipped while dist/ is missing'
+          : 'install @actual-app/api alongside the server, or run the machine plane from a repo checkout',
+      };
+    }
+
+    // Anything else is a real load error — a throw at module scope, a native
+    // binding mismatch — and its message is the only useful thing we have.
+    return {
+      error: `@actual-app/api failed to load (${message}).`,
+      hint: 'read ~/T/_actual_budget/server.log, then rebuild the workspace',
+    };
   }
 }
 

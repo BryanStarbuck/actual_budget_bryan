@@ -71,8 +71,8 @@ install: _check-tools
 # workspace list (minus the root workspace and mobile-client) so new packages are picked up on their
 # own.
 #
-# Build every workspace except mobile-client, plus the operator CLI.
-build: setup build-cli
+# Build every workspace except mobile-client, plus the CLI and the MCP server.
+build: setup build-cli build-mcp
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{root}}"
@@ -90,6 +90,16 @@ build: setup build-cli
 # Build the operator CLI (pm/cli.mdx §2.3) — outside the workspace glob.
 build-cli:
     cd "{{root}}/cli" && just build
+
+# Build the MCP server (pm/mcp.mdx §4) — also outside the workspace glob.
+#
+# Its two runtime deps live in mcp/node_modules, installed by `just -f mcp/justfile
+# install`, never in the repo's yarn.lock — the same reasoning as cli/: upstream
+# regenerates that lockfile and must never be given a chance to touch ours.
+#
+# Build the actual_budget MCP server (pm/mcp.mdx §4).
+build-mcp:
+    cd "{{root}}/mcp" && just build
 
 # Needs CocoaPods (`brew install cocoapods`), Xcode with its command line tools, and the Android SDK
 # with a working ./gradlew — expect it to fail loudly if any of the three is missing.

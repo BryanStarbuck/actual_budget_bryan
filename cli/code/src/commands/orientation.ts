@@ -32,7 +32,8 @@ import {
 import { Exit } from '../exit.js';
 import { stateDir } from '../logger.js';
 import { withSpinner } from '../progress.js';
-import { out } from '../render.js';
+import { out, render } from '../render.js';
+import type { Row } from '../render.js';
 import type { Context, Verb } from '../verb.js';
 
 const WEB_URL = 'http://localhost:3001/';
@@ -467,6 +468,168 @@ export const ping: Verb = {
     out(JSON.stringify(envelope, null, 2));
     return Exit.ok;
   },
+};
+
+/**
+ * `abx whoami` — pm/apis.mdx §8.0.
+ *
+ * The first thing to run when an answer looks wrong. Nine times in ten the
+ * cause is a different budget or a different install, and both are in here.
+ */
+export const whoami: Verb = {
+  name: 'whoami',
+  summary: 'which install, which budget, which tiers, which key',
+  async run(ctx): Promise<number> {
+    const envelope = await call(ctx.target, ctx.requireKey(), '/whoami', {
+      timeoutMs: 10_000,
+      logger: ctx.logger,
+      verb: 'whoami',
+    });
+
+    const d = (envelope as { data: WhoamiData }).data;
+    const rows: Row[] = [
+      { field: 'target', value: d.target },
+      { field: 'server', value: d.serverVersion },
+      { field: 'key', value: d.keyFingerprint },
+      { field: 'budget', value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)' },
+      { field: 'engine', value: d.engine.status },
+      { field: 'data dir', value: d.engine.dataDir },
+      { field: 'write tier', value: d.tiers.write ? 'ENABLED' : 'off' },
+      { field: 'admin tier', value: d.tiers.admin ? 'ENABLED' : 'off' },
+      { field: 'statements', value: d.statementsRoot ?? '(not configured)' },
+    ];
+
+    out(
+      render(ctx.format, envelope, rows, [
+        { key: 'field', header: 'FIELD' },
+        { key: 'value', header: 'VALUE' },
+      ]),
+    );
+    return Exit.ok;
+  },
+};
+
+type WhoamiData = {
+  target: string;
+  serverVersion: string;
+  keyFingerprint: string;
+  tiers: { read: boolean; write: boolean; admin: boolean };
+  engine: { status: string; dataDir: string };
+  budget: { id: string; name: string } | null;
+  statementsRoot: string | null;
+};
+
+/**
+ * `abx capabilities` — pm/apis.mdx §6.3.
+ *
+ * What THIS server build can do. It exists so that a verb the server does not
+ * have yet is a sentence rather than a 404 the operator has to decode, and so
+ * a `planned` route cannot be mistaken for a working one.
+ */
+export const capabilities: Verb = {
+  name: 'capabilities',
+  summary: 'the route table, tiers and limits of this server build',
+  async run(ctx): Promise<number> {
+    const envelope = await call(
+      ctx.target,
+      ctx.requireKey(),
+      '/capabilities',
+      { timeoutMs: 10_000, logger: ctx.logger, verb: 'capabilities' },
+    );
+
+    const d = (envelope as { data: CapabilitiesData }).data;
+    const rows: Row[] = d.routes.flatMap(r =>
+      r.methods.map(m => ({
+        method: m,
+        path: r.path,
+        tier: r.tier[m],
+        status: r.status[m],
+        summary: r.summary[m],
+      })),
+    );
+
+    out(
+      render(ctx.format, envelope, rows, [
+        { key: 'method', header: 'METHOD' },
+        { key: 'path', header: 'PATH' },
+        { key: 'tier', header: 'TIER' },
+        { key: 'status', header: 'STATUS' },
+        { key: 'summary', header: 'SUMMARY' },
+      ]),
+    );
+    return Exit.ok;
+  },
+};
+
+type CapabilitiesData = {
+  routes: Array<{
+    path: string;
+    methods: string[];
+    tier: Record<string, string>;
+    status: Record<string, string>;
+    summary: Record<string, string>;
+  }>;
+};
+
+/**
+ * `abx health` — pm/apis.mdx §8.0.
+ *
+ * `--probe` starts the engine rather than only reporting that it has not
+ * started. Off by default, because the plain check must not depend on the
+ * thing it is checking.
+ *
+ * Exit code 1 when unhealthy, so this is usable in a shell conditional — the
+ * whole point of a health verb.
+ */
+export const health: Verb = {
+  name: 'health',
+  summary: 'can the plane actually answer a question about a budget?',
+  flags: {
+    probe: {
+      arity: 'boolean',
+      help: 'start the engine and report the result, instead of only reporting that it has not started',
+    },
+  },
+  async run(ctx): Promise<number> {
+    const probe = getBoolean(ctx.args, 'probe');
+    const envelope = await call(
+      ctx.target,
+      ctx.requireKey(),
+      probe ? '/health?probe=true' : '/health',
+      {
+        // A probe initialises the engine, which opens a database and runs
+        // migrations. That is not a 10-second operation on a cold budget.
+        timeoutMs: probe ? 120_000 : 10_000,
+        logger: ctx.logger,
+        verb: 'health',
+      },
+    );
+
+    const d = (envelope as { data: HealthData }).data;
+    const rows: Row[] = [
+      { field: 'healthy', value: d.healthy ? 'yes' : 'NO' },
+      { field: 'engine', value: d.engine.status },
+      { field: 'budget', value: d.budget ? `${d.budget.name} (${d.budget.id})` : '(none open)' },
+      { field: 'known budgets', value: String(d.knownBudgets.length) },
+      ...(d.hint ? [{ field: 'next step', value: d.hint }] : []),
+    ];
+
+    out(
+      render(ctx.format, envelope, rows, [
+        { key: 'field', header: 'FIELD' },
+        { key: 'value', header: 'VALUE' },
+      ]),
+    );
+    return d.healthy ? Exit.ok : Exit.failed;
+  },
+};
+
+type HealthData = {
+  healthy: boolean;
+  engine: { status: string; dataDir: string; error?: string };
+  budget: { id: string; name: string } | null;
+  knownBudgets: Array<{ id: string; name: string }>;
+  hint: string | null;
 };
 
 /** Exposed for `abx up`'s failure path, which prints the tail of server.log. */

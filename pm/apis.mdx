@@ -124,7 +124,7 @@ a model comes out of that one instance. There is no second implementation of any
 **The filesystem is the authentication.** The app mints a 256-bit random key into a 0600 file in the
 operator's home directory. A caller that can read that file is already a process running as the
 operator on the operator's machine — at which point it could read the budget database directly. The
-key is not trying to stop that person. It is stopping *everything else*: the other user on the box,
+key is not trying to stop that person. It is stopping _everything else_: the other user on the box,
 the web page the operator happens to have open, the container on the same host.
 
 **Nothing computes twice.** The clients are thin on purpose (cli.mdx §5.4, mcp.mdx §9.4). If a
@@ -163,12 +163,12 @@ model-facing prompt design (mcp.mdx §9, and [ai/mcp_prompt.md](../ai/mcp_prompt
 
 Four halves to that sentence, and each is a rule the build is measured against:
 
-| Half                              | The rule                                                                                                                          |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Everything the UI can do**      | §9's coverage matrix has a row per UI action and a route per row. A blank cell is a backlog item, never a shrug.                   |
-| **The same engine**               | No route reimplements a calculation the app already does. Where upstream computes in React, the calculation **moves** here (§10).  |
-| **The same importer**             | Duplicate detection is `importTransactions` with `dryRun`, never a lookup we wrote (§11.6).                                       |
-| **Three switches and a token**    | Server tier, client tier, `dry_run: false`, and a `confirm_token` the caller can only have read from a plan (§7).                 |
+| Half                           | The rule                                                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Everything the UI can do**   | §9's coverage matrix has a row per UI action and a route per row. A blank cell is a backlog item, never a shrug.                  |
+| **The same engine**            | No route reimplements a calculation the app already does. Where upstream computes in React, the calculation **moves** here (§10). |
+| **The same importer**          | Duplicate detection is `importTransactions` with `dryRun`, never a lookup we wrote (§11.6).                                       |
+| **Three switches and a token** | Server tier, client tier, `dry_run: false`, and a `confirm_token` the caller can only have read from a plan (§7).                 |
 
 ---
 
@@ -202,15 +202,15 @@ token. Admin — the routes that can lose data — needs a third switch the MCP 
 
 ## 1. The three specs, and which one owns what
 
-| Concern                                                   | Owner       |
-| --------------------------------------------------------- | ----------- |
-| What is computable, and what it is called on the wire     | **apis.mdx** |
-| The envelope, the error vocabulary, the tier model        | **apis.mdx** |
+| Concern                                                   | Owner                                                                               |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| What is computable, and what it is called on the wire     | **apis.mdx**                                                                        |
+| The envelope, the error vocabulary, the tier model        | **apis.mdx**                                                                        |
 | The machine key: shape, storage, rotation, gate ladder    | **apis.mdx** (cli.mdx §4 and mcp.mdx §6 restate it, and defer here on any conflict) |
-| Argument parsing, flags, exit codes, terminal rendering   | cli.mdx      |
-| Bring-up, ports, health gating, `abx` verb names          | cli.mdx      |
-| Tool names, tool descriptions, JSON Schema, model framing | mcp.mdx      |
-| How the model is told to think about money                | [ai/mcp_prompt.md](../ai/mcp_prompt.md) |
+| Argument parsing, flags, exit codes, terminal rendering   | cli.mdx                                                                             |
+| Bring-up, ports, health gating, `abx` verb names          | cli.mdx                                                                             |
+| Tool names, tool descriptions, JSON Schema, model framing | mcp.mdx                                                                             |
+| How the model is told to think about money                | [ai/mcp_prompt.md](../ai/mcp_prompt.md)                                             |
 
 **Precedence (LOCKED).** Where this spec and a client spec disagree about the wire, **this spec
 wins** and the client spec is the one with the bug. Where they disagree about a client's own
@@ -281,11 +281,13 @@ packages/sync-server/src/machine/
 ├── envelope.ts              ok/error envelope + error vocabulary   ← exists
 ├── engine.ts                the single @actual-app/api instance, lifecycle, health
 ├── tier.ts                  gate 4 — read / write / admin
-├── schema.ts                gate 5 — hand-written validators, one per route
+├── validate.ts              gate 5 — hand-written validators, one per route
+├── route.ts                 the RouteDef shape + the /capabilities projection
 ├── confirm.ts               gate 6 — plan tokens, ceilings, the write protocol
 ├── money.ts                 cents in, cents out; the ONE conversion point
 ├── routes/
 │   ├── plane.ts             ping · whoami · capabilities · health
+│   ├── planned.ts           declared-but-unbuilt routes (§6.3a)
 │   ├── budgets.ts           budget files, backups, sync
 │   ├── accounts.ts          accounts, groups, close/reopen, reconcile
 │   ├── transactions.ts      transactions, splits, bulk, merge, move, export
@@ -298,6 +300,24 @@ packages/sync-server/src/machine/
 │   └── admin.ts             the destructive tier
 └── *.test.ts                colocated
 ```
+
+**`validate.ts`, not `schema.ts`.** An earlier draft of this spec called it
+`schema.ts`; `/schema` is also a route — the one describing the AQL tables `/query` may name — and
+two different things called "schema" one directory apart is a question every future reader has to
+stop and answer.
+
+**The engine is a DYNAMIC import of a devDependency, not a dependency (LOCKED).**
+`@actual-app/sync-server` is published. Making `@actual-app/api` a runtime dependency of it changes
+an upstream artefact's dependency graph, which is the merge friction this layout exists to avoid —
+the whole delta is meant to be one `app.use()` and one `initMachinePlane()`. So `engine.ts` reaches
+it with `await import(specifier)` through a variable (vite leaves it external), and a deployment
+without it — a production `yarn install:server`, which installs no devDependencies — gets a plane
+that reports the engine as unavailable and says so. That is R9, fail closed, not a degraded mode.
+
+The failure is **diagnosed, not merely caught**: "not installed" and "installed but not built" are
+different problems with different fixes, and a blanket `catch` that reports the first for both sends
+an operator to install something they already have. The distinction is on `ERR_MODULE_NOT_FOUND`
+plus whether the unresolved path is inside `dist/`.
 
 **Why inside `packages/sync-server/` and not outside it like `cli/`.** `abx` lives outside
 `packages/` so an upstream merge can never touch it (cli.mdx §1.4). This plane cannot: it must be
@@ -327,8 +347,8 @@ reasons, each fatal on its own:
 
 1. **It is the operator's, typed by a human.** A CLI that prompts for a password is a CLI that
    cannot run in a loop, and an MCP server that prompts is an MCP server that hangs a conversation.
-2. **It unlocks the wrong thing.** The sync password authorises *sync* — pulling and pushing budget
-   files for any device. This plane authorises *this machine's* engine. Reusing one credential for
+2. **It unlocks the wrong thing.** The sync password authorises _sync_ — pulling and pushing budget
+   files for any device. This plane authorises _this machine's_ engine. Reusing one credential for
    both means a leaked one loses both.
 3. **It is a shared secret with a remote.** The whole point of the machine key is that it never
    leaves this computer, so its blast radius is this computer.
@@ -338,7 +358,7 @@ reasons, each fatal on its own:
 > **32 bytes from `crypto.randomBytes()`, rendered as 64 lowercase hex characters.**
 
 - **256 bits of entropy.** A UUIDv4 carries 122 random bits. This is **more than twice** that, and
-  it is not a UUID on purpose: a UUID *looks* like an identifier, and identifiers get logged, put in
+  it is not a UUID on purpose: a UUID _looks_ like an identifier, and identifiers get logged, put in
   URLs, and pasted into issues. A 64-character hex string looks like a secret and gets treated like
   one.
 - **`crypto.randomBytes` and nothing else.** `Math.random()` is a PRNG seeded from wall-clock-ish
@@ -362,10 +382,10 @@ Code: `packages/sync-server/src/machine/credentials-file.ts` — `mintKey()`, `i
       "api_key": "4f2a…64 hex chars…",
       "created": "2026-09-20T18:04:11.902Z",
       "created_by": "sync-server", // or "abx" or "mcp" — whoever needed it first
-      "label": "bryan-macstudio"
+      "label": "bryan-macstudio",
     },
-    "statements": { "root": "/…/bank_statements" }
-  }
+    "statements": { "root": "/…/bank_statements" },
+  },
   // …other products' top-level keys, which we preserve byte for byte
 }
 ```
@@ -393,7 +413,7 @@ there, and neither of them had to be told about it.
 
 Three rules make that safe:
 
-1. **Mint at boot, never at import.** Resolving the key *creates* one. Doing that at module scope
+1. **Mint at boot, never at import.** Resolving the key _creates_ one. Doing that at module scope
    means every test that imports the module writes a secret into the developer's real home
    directory as an invisible side effect. `machineRouter` is created at import and holds no key;
    `initMachinePlane()` arms it from `run()`.
@@ -410,12 +430,12 @@ they are conveniences over the same code path, not a separate one.
 
 First hit wins:
 
-| # | Source                                              | For                                              |
-| - | --------------------------------------------------- | ------------------------------------------------ |
-| 1 | `ABX_MACHINE_KEY` / `ABMCP_MACHINE_KEY`            | CI, one-off overrides. Never in a checked-in file |
-| 2 | `ABX_MACHINE_KEY_FILE` / `ABMCP_MACHINE_KEY_FILE`  | the Docker-secret shape                          |
-| 3 | `~/.credentials/actual_budget.json`                 | **the normal path**                              |
-| 4 | mint one (servers only; `abx`/MCP mint only on an explicit `key init`) | first run           |
+| #   | Source                                                                 | For                                               |
+| --- | ---------------------------------------------------------------------- | ------------------------------------------------- |
+| 1   | `ABX_MACHINE_KEY` / `ABMCP_MACHINE_KEY`                                | CI, one-off overrides. Never in a checked-in file |
+| 2   | `ABX_MACHINE_KEY_FILE` / `ABMCP_MACHINE_KEY_FILE`                      | the Docker-secret shape                           |
+| 3   | `~/.credentials/actual_budget.json`                                    | **the normal path**                               |
+| 4   | mint one (servers only; `abx`/MCP mint only on an explicit `key init`) | first run                                         |
 
 `ABX_CREDENTIALS_FILE` / `ABMCP_CREDENTIALS_FILE` relocate step 3 — that is the seam every test
 uses, and it is why no test touches a real home directory.
@@ -434,12 +454,12 @@ Content-Type: application/json
 - **`X-Actual-Machine-Key`, not `Authorization: Bearer`.** Proxies, browser devtools and HTTP
   libraries all have special handling for `Authorization` — auto-forwarding on redirect, credential
   managers, "remember this". A bespoke header gets none of that helpfulness.
-- **Constant-time comparison, safe on unequal lengths.** `timingSafeEqual` *throws* on a length
+- **Constant-time comparison, safe on unequal lengths.** `timingSafeEqual` _throws_ on a length
   mismatch, so the obvious guard `a.length === b.length && timingSafeEqual(a, b)` leaks the length
   through timing and is itself an oracle. Both sides are hashed to a fixed-width digest first, and
   one comparison of equal-length buffers always runs.
 - **The 401 body is constant.** `{"ok":false,"error":{"code":"unauthorized"}}` — byte for byte the
-  same for a missing key and a wrong one. The server keeps its silence; the *client* does the
+  same for a missing key and a wrong one. The server keeps its silence; the _client_ does the
   explaining, because the client knows which file it failed to read and the server does not know who
   is asking.
 
@@ -447,14 +467,14 @@ Content-Type: application/json
 
 Order is load-bearing. Nothing below a gate runs until it passes.
 
-| # | Gate           | Refuses                                              | Answer                       |
-| - | -------------- | ---------------------------------------------------- | ---------------------------- |
-| 1 | Loopback socket | another computer                                    | `404`                        |
-| 2 | Origin + Host   | a web page on this computer; DNS rebinding          | `404`                        |
-| 3 | The key         | another user on this computer                       | `401`, constant body         |
-| 4 | Tier            | a write with the tier off; admin from the MCP       | `403 write_disabled`/`forbidden` |
-| 5 | Input schema    | a malformed or unknown argument                     | `400 invalid_input`          |
-| 6 | Confirm + ceiling | a write with no token, a stale token, or too big  | `403`/`409`                  |
+| #   | Gate              | Refuses                                          | Answer                           |
+| --- | ----------------- | ------------------------------------------------ | -------------------------------- |
+| 1   | Loopback socket   | another computer                                 | `404`                            |
+| 2   | Origin + Host     | a web page on this computer; DNS rebinding       | `404`                            |
+| 3   | The key           | another user on this computer                    | `401`, constant body             |
+| 4   | Tier              | a write with the tier off; admin from the MCP    | `403 write_disabled`/`forbidden` |
+| 5   | Input schema      | a malformed or unknown argument                  | `400 invalid_input`              |
+| 6   | Confirm + ceiling | a write with no token, a stale token, or too big | `403`/`409`                      |
 
 **Two facts about the app this mounts inside that gates 1 and 2 must survive:**
 
@@ -467,7 +487,7 @@ Order is load-bearing. Nothing below a gate runs until it passes.
    packet really does come from the loopback interface. The key is what stops it. Gate 2 is the
    second wall so that is not one control deep — a browser always sends `Origin` or
    `Sec-Fetch-Site` and cannot be talked out of it, and `abx`, the MCP and `curl` send neither, so
-   *presence* is the signal. We do not need to recognise the attacker's origin, only that there is
+   _presence_ is the signal. We do not need to recognise the attacker's origin, only that there is
    one. The plane also strips the `Access-Control-Allow-Origin` the app-wide `cors()` already added,
    and sets `Cache-Control: no-store` and `Vary: Origin`.
 
@@ -489,7 +509,7 @@ greps the built output for anything matching the key pattern.
 
 **What the key is NOT:**
 
-- Not a user identity. It authenticates *the machine*, not a person, and there is exactly one.
+- Not a user identity. It authenticates _the machine_, not a person, and there is exactly one.
 - Not a capability grant. Holding it does not enable writes; the tier switches do (§6).
 - Not a sync credential. It cannot pull, push, or reach the sync server's own endpoints.
 - Not an API key in the SaaS sense. It is never sent off this machine, ever, by anything.
@@ -511,11 +531,11 @@ Every response, success or failure, is one JSON object of the same shape.
   "data": { /* route-specific */ },
   "meta": {
     "target": "local",
-    "budget_id": "8c1e…",
-    "budget_name": "Bryan personal",
-    "server_version": "26.9.0",
-    "as_of": "2026-09-20T18:41:02.118Z",
-    "took_ms": 38,
+    "budgetId": "8c1e…",
+    "budgetName": "Household",
+    "serverVersion": "26.9.0",
+    "asOf": "2026-09-20T18:41:02.118Z",
+    "tookMs": 38,
     "truncated": false,
     "tier": "read"
   }
@@ -533,11 +553,23 @@ Every response, success or failure, is one JSON object of the same shape.
 }
 ```
 
+**Casing (LOCKED — §5.1a).** Two conventions, and the split is principled rather than sloppy:
+
+- **`meta` and `error` are OURS, and they are camelCase.** This is a TypeScript codebase and
+  [mcp.mdx](./mcp.mdx) §12.1 already publishes `budgetId` / `serverVersion` / `asOf` / `tookMs`.
+- **`data` is the ENGINE'S, verbatim, in the engine's own casing — which is snake_case**
+  (`balance_current`, `account_group_id`, `is_income`, `group_id`). Renaming it would be a
+  translation layer, and a translation layer is a second representation of every entity that can
+  drift from the first. §2 R7 says the app decides and we report; renaming what it decided is not
+  reporting it.
+- **Arguments are snake_case**, matching both the engine's field names and the MCP's tool arguments,
+  so `category_id` means the same thing in a filter, in a response and in a tool call.
+
 - **`data` is never a bare array.** A list route returns `{ "accounts": [...] }`, so the shape can
   grow a `total` or a `cursor` later without breaking a caller that indexed into it.
-- **`meta.budget_id` and `meta.budget_name` are on every response.** They are the cheapest possible
+- **`meta.budgetId` and `meta.budgetName` are on every response.** They are the cheapest possible
   defence against a caller that has drifted onto the wrong ledger: the evidence is in every reply.
-- **`meta.as_of` is the server's clock.** A balance without a timestamp is a lie tomorrow.
+- **`meta.asOf` is the server's clock.** A balance without a timestamp is a lie tomorrow.
 - **`error.details` is structured and bounded.** Field names, counts, ids, the conflicting rows. It
   never contains a stack trace, a file path outside the statements root, or a SQL string — those go
   to the server's log and stay there (§16.4).
@@ -547,17 +579,17 @@ Every response, success or failure, is one JSON object of the same shape.
 `unauthorized` · `forbidden` · `not_found` · `invalid_input` · `conflict` · `write_disabled` ·
 `not_ready` · `upstream_error` · `internal`
 
-| Code             | HTTP | Means                                                              |
-| ---------------- | ---- | ------------------------------------------------------------------ |
-| `unauthorized`   | 401  | gate 3 — no key or wrong key                                       |
-| `forbidden`      | 403  | gate 4/5 — the tier or the guard says no (admin route, denied table) |
-| `not_found`      | 404  | gates 1–2, an unknown route, or a real missing entity               |
-| `invalid_input`  | 400  | gate 5 — schema, range, or an argument combination that cannot hold |
+| Code             | HTTP | Means                                                                                                 |
+| ---------------- | ---- | ----------------------------------------------------------------------------------------------------- |
+| `unauthorized`   | 401  | gate 3 — no key or wrong key                                                                          |
+| `forbidden`      | 403  | gate 4/5 — the tier or the guard says no (admin route, denied table)                                  |
+| `not_found`      | 404  | gates 1–2, an unknown route, or a real missing entity                                                 |
+| `invalid_input`  | 400  | gate 5 — schema, range, or an argument combination that cannot hold                                   |
 | `conflict`       | 409  | the world changed under the caller — stale token, concurrent write, two statements claiming one month |
-| `write_disabled` | 403  | gate 4 — a write route with the tier off                            |
-| `not_ready`      | 503  | the app is up but no budget is loaded, or the plane is not armed     |
-| `upstream_error` | 502  | the engine or the sync server failed in a way we can name            |
-| `internal`       | 500  | anything else; the message is generic and the detail is in the log   |
+| `write_disabled` | 403  | gate 4 — a write route with the tier off                                                              |
+| `not_ready`      | 503  | the app is up but no budget is loaded, or the plane is not armed                                      |
+| `upstream_error` | 502  | the engine or the sync server failed in a way we can name                                             |
+| `internal`       | 500  | anything else; the message is generic and the detail is in the log                                    |
 
 **A tenth code is a spec change, not a commit.** mcp.mdx §12.3 lists twelve: the three extra
 (`confirm_required`, `too_many_changes`, `wrong_server`) are minted by the MCP and **never appear on
@@ -577,25 +609,25 @@ The path carries the version: `/machine/v1/`. Within `v1`:
 
 ### 5.4 Errors name a fix (R6)
 
-`hint` is written for the caller who will read it, and it is a *command or a decision*, never a
+`hint` is written for the caller who will read it, and it is a _command or a decision_, never a
 restatement:
 
-| Bad hint                       | Good hint                                                              |
-| ------------------------------ | ---------------------------------------------------------------------- |
-| "Invalid account id."          | `GET /machine/v1/accounts` — or pass `account_name` instead of `account_id` |
-| "Write disabled."              | Set `ACTUAL_MACHINE_ALLOW_WRITE=1` on the server and restart it        |
-| "Too many changes."            | 1,904 rows would change; raise `max_changes`, or narrow with `start`   |
-| "Not ready."                   | `abx up`, then retry                                                   |
+| Bad hint              | Good hint                                                                   |
+| --------------------- | --------------------------------------------------------------------------- |
+| "Invalid account id." | `GET /machine/v1/accounts` — or pass `account_name` instead of `account_id` |
+| "Write disabled."     | Set `ACTUAL_MACHINE_ALLOW_WRITE=1` on the server and restart it             |
+| "Too many changes."   | 1,904 rows would change; raise `max_changes`, or narrow with `start`        |
+| "Not ready."          | `abx up`, then retry                                                        |
 
 ### 5.5 Pagination, ordering and truncation
 
 Every list route takes `limit`, `offset` and `order`; every one has a hard cap.
 
-| Argument | Default | Cap    | Notes                                                       |
-| -------- | ------- | ------ | ----------------------------------------------------------- |
-| `limit`  | 200     | 5,000  | **Clamped, never rejected** — over the cap you get the cap   |
-| `offset` | 0       | —      | Stable only under a stable `order`                           |
-| `order`  | route   | —      | `field` or `-field`; only fields the route documents         |
+| Argument | Default | Cap   | Notes                                                      |
+| -------- | ------- | ----- | ---------------------------------------------------------- |
+| `limit`  | 200     | 5,000 | **Clamped, never rejected** — over the cap you get the cap |
+| `offset` | 0       | —     | Stable only under a stable `order`                         |
+| `order`  | route   | —     | `field` or `-field`; only fields the route documents       |
 
 When a cap bound the result: `meta.truncated: true` and `meta.limit_applied: 5000`. A caller that
 wants everything pages, and a caller that wanted a number should have asked §10 for the number.
@@ -626,11 +658,11 @@ one month.
 
 ### 6.1 Three tiers
 
-| Tier      | Server switch                          | What it is for                                                                      |
-| --------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
-| **read**  | always on                              | everything that computes and returns                                                  |
-| **write** | `ACTUAL_MACHINE_ALLOW_WRITE=1`         | changes the ledger: transactions, budgets, accounts, rules, imports                   |
-| **admin** | `ACTUAL_MACHINE_ALLOW_ADMIN=1`         | can lose data or change the install: delete an account, delete a budget file, restore a backup, rotate |
+| Tier      | Server switch                  | What it is for                                                                                         |
+| --------- | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| **read**  | always on                      | everything that computes and returns                                                                   |
+| **write** | `ACTUAL_MACHINE_ALLOW_WRITE=1` | changes the ledger: transactions, budgets, accounts, rules, imports                                    |
+| **admin** | `ACTUAL_MACHINE_ALLOW_ADMIN=1` | can lose data or change the install: delete an account, delete a budget file, restore a backup, rotate |
 
 Admin is a separate switch and not "write plus". The two are held for different reasons at different
 times: write is "I intend to let a program edit my budget this week"; admin is "I am doing surgery
@@ -646,23 +678,45 @@ does not know or care which client is calling — **it enforces its own half and
 
 ### 6.3 `GET /capabilities` (LOCKED)
 
-One read route returns the machine-readable route table of *this build*:
+One read route returns the machine-readable route table of _this build_:
 
 ```jsonc
 {
   "ok": true,
   "data": {
-    "api_version": "v1",
-    "server_version": "26.9.0",
+    "apiVersion": "v1",
+    "serverVersion": "26.9.0",
     "tiers": { "read": true, "write": true, "admin": false },
-    "budget_loaded": true,
+    "budgetLoaded": true,
     "routes": [
-      { "path": "/accounts", "methods": ["GET", "POST"], "tier": { "GET": "read", "POST": "write" } },
-      { "path": "/budget/month/:month/cover-overspending", "methods": ["POST"], "tier": { "POST": "write" } }
+      {
+        "path": "/accounts",
+        "methods": ["GET", "POST"],
+        "tier": { "GET": "read", "POST": "write" },
+        "status": { "GET": "live", "POST": "live" },
+        "summary": { "GET": "Accounts, with balances.", "POST": "Create an account." },
+      },
+      {
+        "path": "/sync",
+        "methods": ["POST"],
+        "tier": { "POST": "write" },
+        "status": { "POST": "planned" },
+        "summary": { "POST": "Sync with the sync server. NOT IMPLEMENTED YET (phase P3)." },
+      },
     ],
-    "limits": { "max_limit": 5000, "max_changes_default": 200, "max_body_bytes": 8388608 },
-    "features": ["analytics", "ingest.prepared", "ingest.raw", "goal_templates", "undo"]
-  }
+    "limits": {
+      "maxLimit": 5000,
+      "maxChangesDefault": 200,
+      "maxBodyBytes": 8388608,
+    },
+    "features": [
+      "analytics",
+      "ingest.prepared",
+      "ingest.raw",
+      "goal_templates",
+      "undo",
+    ],
+  },
 }
 ```
 
@@ -672,7 +726,23 @@ rather than surfacing a 404 the operator has to decode.
 
 **The table is generated from the same array the router is built from.** There is no second list
 (the mistake mcp.mdx §9.3 names). A route present in one and missing in the other is impossible by
-construction.
+construction, and a test walks every published entry and asserts it answers rather than falling
+through to the terminal 404.
+
+### 6.3a `status` — `live` and `planned` (LOCKED)
+
+Every route publishes `status`. `live` means implemented. **`planned` means mounted, tiered and
+gated, with a handler that refuses `not_ready` naming the phase that will build it.**
+
+Planned routes exist for one reason: the gate ladder in front of a route is the part most worth
+testing and the part least likely to change, and gates 4 and 6 cannot be integration-tested through
+a real route until a phase that has one. Declaring `POST /sync` as planned means the write-tier
+refusal is exercised end to end — through the real router, the real auth middleware and the real
+envelope — from P0 rather than from P3.
+
+`status` is published precisely so this cannot mislead: a client reading the route table sees that
+`/sync` is planned and does not come away believing it works, which would be the server describing
+itself incorrectly — the exact failure this section exists to prevent.
 
 ---
 
@@ -695,7 +765,7 @@ the operator learns the size rather than being told "too many".
 Every write route accepts `dry_run`, and **it defaults to `true`**. A call with no `dry_run` changes
 nothing and returns what it would have done.
 
-The preview is produced by the *same* code path as the write. For imports this is literally
+The preview is produced by the _same_ code path as the write. For imports this is literally
 `importTransactions(..., { dryRun: true })`, which runs the whole real reconciliation — `imported_id`
 lookup, the rules engine, fuzzy date/amount matching, split handling — and returns
 `{ added, updated, updatedPreview }` without writing. For everything else it is the same handler
@@ -714,13 +784,16 @@ itself).
 A dry run returns:
 
 ```jsonc
-{ "ok": true, "data": {
+{
+  "ok": true,
+  "data": {
     "dry_run": true,
     "changes": { "added": 117, "updated": 12, "unchanged": 1742 },
-    "confirm_token": "cf_01J8…",         // opaque, 128 bits, this process only
+    "confirm_token": "cf_01J8…", // opaque, 128 bits, this process only
     "expires_at": "2026-09-20T19:11:02Z", // 10 minutes
-    "fingerprint": "sha256:7ab3…"         // of the exact change set
-} }
+    "fingerprint": "sha256:7ab3…", // of the exact change set
+  },
+}
 ```
 
 The real call passes `dry_run: false` and that token.
@@ -728,11 +801,11 @@ The real call passes `dry_run: false` and that token.
 - **Ten-minute expiry**, then `conflict` with the hint to re-plan.
 - **The change set is recomputed at apply time and compared against `fingerprint`.** If the world
   moved — someone categorised a transaction in the browser, a sync landed — the token is refused with
-  `conflict` and the *new* counts, so nobody applies an hour-old plan against a changed budget.
+  `conflict` and the _new_ counts, so nobody applies an hour-old plan against a changed budget.
 - **The token is in-process only.** It is not persisted, not derived from the key, and does not
   survive a restart. It proves "you read the plan I just produced", which is the only thing it is for.
-- A model cannot invent it. That is the actual mechanism: the write path *requires having read the
-  preview*, and no amount of confident guessing substitutes.
+- A model cannot invent it. That is the actual mechanism: the write path _requires having read the
+  preview_, and no amount of confident guessing substitutes.
 
 ### 7.4 Batch
 
@@ -745,16 +818,26 @@ difference between setting 60 category amounts in 400 ms and in 30 s.
   "dry_run": true,
   "max_changes": 200,
   "operations": [
-    { "op": "budget.set_amount", "month": "2026-09", "category_id": "…", "amount": -45000 },
-    { "op": "budget.set_amount", "month": "2026-09", "category_id": "…", "amount": -12000 }
-  ]
+    {
+      "op": "budget.set_amount",
+      "month": "2026-09",
+      "category_id": "…",
+      "amount": -45000,
+    },
+    {
+      "op": "budget.set_amount",
+      "month": "2026-09",
+      "category_id": "…",
+      "amount": -12000,
+    },
+  ],
 }
 ```
 
 - One `confirm_token` for the whole batch.
 - **All or nothing.** A failure rolls the batch back and reports the index that failed and why.
 - `op` names are the route's own family and verb, from a closed set published in `/capabilities`.
-- The ceiling counts *changes*, not operations.
+- The ceiling counts _changes_, not operations.
 
 ### 7.5 Undo
 
@@ -763,7 +846,7 @@ browser, which is why every mutating engine handler in the app is wrapped in `un
 
 - The response names what was undone.
 - The stack is the app's, shared with the browser. Undoing from a program undoes whatever was last
-  done *by anyone*, so the route returns the description first and the operator (or the agent's
+  done _by anyone_, so the route returns the description first and the operator (or the agent's
   human) decides.
 - Undo is a **write**-tier route. It is also the single most valuable route on this plane for an
   operator who has just let an agent write, and it is built in phase P4, not "later".
@@ -792,33 +875,59 @@ Conventions for every table below:
 
 ### 8.0 The plane itself
 
-| Route                     | M   | Tier | Arguments        | Answers                                                        |
-| ------------------------- | --- | ---- | ---------------- | -------------------------------------------------------------- |
-| `/ping`                   | GET | R    | —                | liveness, key fingerprint, write tier, server version           |
-| `/whoami`                 | GET | R    | —                | install path, budget id + name, engine state, tiers, key fingerprint, statements root (configured or null) |
-| `/capabilities`           | GET | R    | —                | §6.3                                                            |
-| `/health`                 | GET | R    | —                | engine loaded? budget open? last sync? sync server reachable?   |
-| `/schema`                 | GET | R    | `table`          | the AQL tables and fields `/query` may name (§13)               |
+| Route           | M   | Tier | Arguments | Answers                                                                                                    |
+| --------------- | --- | ---- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `/ping`         | GET | R    | —         | liveness, key fingerprint, write tier, server version                                                      |
+| `/whoami`       | GET | R    | —         | install path, budget id + name, engine state, tiers, key fingerprint, statements root (configured or null) |
+| `/capabilities` | GET | R    | —         | §6.3                                                                                                       |
+| `/health`       | GET | R    | `probe`   | engine loaded? budget open? which budgets exist? what to do next                                           |
+| `/schema`       | GET | R    | `table`   | the AQL tables and fields `/query` may name (§13). **Phase P2 — see below**                                |
 
-`/ping` versus `/health`: ping proves *the plane is mounted and the key is right*; health proves *the
-app can answer a question about a budget*. A green health with a 401 from ping is the most likely
+`/ping` versus `/health`: ping proves _the plane is mounted and the key is right_; health proves _the
+app can answer a question about a budget_. A green health with a 401 from ping is the most likely
 first-run failure and it has to be distinguishable.
+
+**`/ping`, `/whoami`, `/capabilities` and `/health` answer WITHOUT an initialised engine**, and that
+is the design rather than an accident: their job is to report what is wrong, and a diagnostic route
+that needs the thing it is diagnosing is no diagnostic at all. The engine initialises lazily, on
+first use by a route that needs it (§15).
+
+**`/health?probe=true`** is the exception that proves the rule. A lazy engine means the plain check
+can otherwise only report "not started yet", so `probe` deliberately attempts initialisation and
+reports the outcome — a failed probe comes back `200` with the reason and the remediation, never as
+a thrown error. It defaults to **false**, so the ordinary health check stays free of the dependency
+it is reporting on.
+
+**`healthy` is deliberately narrow**: an engine that is up with _no budget open_ is not healthy for
+the purpose any caller has in mind, and answering "ok" there is how a model concludes that an empty
+result means no transactions rather than no budget.
+
+**No budget is ever guessed.** With exactly one budget file and no configured id, that one is
+opened. With two or more and no `ACTUAL_MACHINE_BUDGET_ID`, **nothing** is opened, and every route
+that needs a budget refuses while naming the ids that exist. Choosing a budget on the operator's
+behalf is the worst mistake available on this plane (mcp.mdx §3).
+
+**`/schema` moved to phase P2** — a change this spec learned from building. The AQL schema lives in
+loot-core and is **not exposed through `@actual-app/api`**, which exports `aqlQuery` but not the
+table definitions. `/schema` therefore needs either a new engine export or engine-backed
+introspection; both are the query family's work, and shipping it meanwhile would mean publishing a
+table list maintained by hand here — a second copy of loot-core's schema, free to drift.
 
 ### 8.1 Budget files
 
-| Route                        | M      | Tier | Arguments                              | Notes                                       |
-| ---------------------------- | ------ | ---- | -------------------------------------- | ------------------------------------------- |
-| `/budgets`                   | GET    | R    | —                                      | `getBudgets()`                              |
-| `/budgets`                   | POST   | W    | `name`, `budget_type` (envelope\|tracking) | `create-budget`                          |
-| `/budgets/:id/load`          | POST   | W    | —                                      | `loadBudget()`. Changes what every other route answers about — the response repeats the new `budget_name` loudly |
-| `/budgets/:id/download`      | POST   | W    | `password`                             | `downloadBudget()` from the sync server     |
-| `/budgets/import`            | POST   | W    | `path` \| `contents`, `format`         | Actual `.zip`, YNAB4, YNAB5                 |
-| `/budgets/:id/export`        | GET    | R    | —                                      | the `.zip`, streamed                        |
-| `/budgets/:id/backups`       | GET    | R    | —                                      | `backups-get`                               |
-| `/budgets/:id/backup`        | POST   | W    | —                                      | `backup-make`                               |
-| `/budgets/:id/restore`       | POST   | **A** | `backup_id`                           | `backup-load`. Replaces the live budget     |
-| `/budgets/:id`               | DELETE | **A** | `confirm_token`                       | `delete-budget`                             |
-| `/sync`                      | POST   | W    | —                                      | `sync()`. No `dry_run`                      |
+| Route                   | M      | Tier  | Arguments                                  | Notes                                                                                                            |
+| ----------------------- | ------ | ----- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `/budgets`              | GET    | R     | —                                          | `getBudgets()`                                                                                                   |
+| `/budgets`              | POST   | W     | `name`, `budget_type` (envelope\|tracking) | `create-budget`                                                                                                  |
+| `/budgets/:id/load`     | POST   | W     | —                                          | `loadBudget()`. Changes what every other route answers about — the response repeats the new `budget_name` loudly |
+| `/budgets/:id/download` | POST   | W     | `password`                                 | `downloadBudget()` from the sync server                                                                          |
+| `/budgets/import`       | POST   | W     | `path` \| `contents`, `format`             | Actual `.zip`, YNAB4, YNAB5                                                                                      |
+| `/budgets/:id/export`   | GET    | R     | —                                          | the `.zip`, streamed                                                                                             |
+| `/budgets/:id/backups`  | GET    | R     | —                                          | `backups-get`                                                                                                    |
+| `/budgets/:id/backup`   | POST   | W     | —                                          | `backup-make`                                                                                                    |
+| `/budgets/:id/restore`  | POST   | **A** | `backup_id`                                | `backup-load`. Replaces the live budget                                                                          |
+| `/budgets/:id`          | DELETE | **A** | `confirm_token`                            | `delete-budget`                                                                                                  |
+| `/sync`                 | POST   | W     | —                                          | `sync()`. No `dry_run`                                                                                           |
 
 **`POST /budgets/:id/load` is the one route with global side effects**, and it is called out here
 because every other route's `meta.budget_id` changes underneath the caller. It requires a confirm
@@ -826,33 +935,33 @@ token like any write, and the token's fingerprint covers the target id.
 
 ### 8.2 Accounts
 
-| Route                        | M      | Tier | Arguments                                                        |
-| ---------------------------- | ------ | ---- | ---------------------------------------------------------------- |
-| `/accounts`                  | GET    | R    | `include_closed` (false), `group_id`, `with_balances` (true), `as_of`, `type` |
-| `/accounts/:id`              | GET    | R    | —                                                                |
-| `/accounts/:id/balance`      | GET    | R    | `as_of`, `cleared_only`, `uncleared_only`                        |
-| `/accounts/:id/properties`   | GET    | R    | — (`account-properties`: counts, first/last transaction, balance) |
-| `/accounts`                  | POST   | W    | `name`, `type`, `offbudget` (false), `initial_balance` (cents), `group_id`, `idempotency_key` |
-| `/accounts/batch`            | POST   | W    | `accounts[]` — §12 uses this                                     |
-| `/accounts/:id`              | PATCH  | W    | `name`, `offbudget`, `type`, `group_id`, `notes`                 |
-| `/accounts/:id/close`        | POST   | W    | `transfer_account_id`, `transfer_category_id`                    |
-| `/accounts/:id/reopen`       | POST   | W    | —                                                                |
-| `/accounts/:id/unlink`       | POST   | W    | — (drops the bank-sync link; leaves transactions alone)          |
-| `/accounts/:id`              | DELETE | **A** | `confirm_token`                                                 |
-| `/accounts/:id/move`         | POST   | W    | `to_index`, `group_id`                                           |
-| `/account-groups`            | GET    | R    | —                                                                |
-| `/account-groups`            | POST   | W    | `name`                                                           |
-| `/account-groups/:id`        | PATCH  | W    | `name`                                                           |
-| `/account-groups/:id`        | DELETE | W    | — (accounts survive; they lose the group)                        |
-| `/account-groups/:id/move`   | POST   | W    | `to_index`                                                       |
+| Route                      | M      | Tier  | Arguments                                                                                     |
+| -------------------------- | ------ | ----- | --------------------------------------------------------------------------------------------- |
+| `/accounts`                | GET    | R     | `include_closed` (false), `group_id`, `with_balances` (true), `as_of`, `type`                 |
+| `/accounts/:id`            | GET    | R     | —                                                                                             |
+| `/accounts/:id/balance`    | GET    | R     | `as_of`, `cleared_only`, `uncleared_only`                                                     |
+| `/accounts/:id/properties` | GET    | R     | — (`account-properties`: counts, first/last transaction, balance)                             |
+| `/accounts`                | POST   | W     | `name`, `type`, `offbudget` (false), `initial_balance` (cents), `group_id`, `idempotency_key` |
+| `/accounts/batch`          | POST   | W     | `accounts[]` — §12 uses this                                                                  |
+| `/accounts/:id`            | PATCH  | W     | `name`, `offbudget`, `type`, `group_id`, `notes`                                              |
+| `/accounts/:id/close`      | POST   | W     | `transfer_account_id`, `transfer_category_id`                                                 |
+| `/accounts/:id/reopen`     | POST   | W     | —                                                                                             |
+| `/accounts/:id/unlink`     | POST   | W     | — (drops the bank-sync link; leaves transactions alone)                                       |
+| `/accounts/:id`            | DELETE | **A** | `confirm_token`                                                                               |
+| `/accounts/:id/move`       | POST   | W     | `to_index`, `group_id`                                                                        |
+| `/account-groups`          | GET    | R     | —                                                                                             |
+| `/account-groups`          | POST   | W     | `name`                                                                                        |
+| `/account-groups/:id`      | PATCH  | W     | `name`                                                                                        |
+| `/account-groups/:id`      | DELETE | W     | — (accounts survive; they lose the group)                                                     |
+| `/account-groups/:id/move` | POST   | W     | `to_index`                                                                                    |
 
 **Reconciliation** — a composed route (R1's named exception), because upstream computes it in React
 (`packages/desktop-client/src/components/accounts/Reconcile.tsx`) and a thin client must not:
 
-| Route                              | M    | Tier | Arguments                                        |
-| ---------------------------------- | ---- | ---- | ------------------------------------------------ |
-| `/accounts/:id/reconcile/plan`     | POST | R    | `target_balance` (cents), `as_of`                |
-| `/accounts/:id/reconcile/apply`    | POST | W    | `confirm_token`, `create_adjustment` (true), `adjustment_category_id`, `lock` (false) |
+| Route                           | M    | Tier | Arguments                                                                             |
+| ------------------------------- | ---- | ---- | ------------------------------------------------------------------------------------- |
+| `/accounts/:id/reconcile/plan`  | POST | R    | `target_balance` (cents), `as_of`                                                     |
+| `/accounts/:id/reconcile/apply` | POST | W    | `confirm_token`, `create_adjustment` (true), `adjustment_category_id`, `lock` (false) |
 
 `plan` returns the engine's cleared balance as of the date, the operator's figure, the signed
 difference, the count of uncleared transactions, and a `confirm_token`. `apply` optionally creates
@@ -863,22 +972,22 @@ to be composed.
 
 ### 8.3 Transactions
 
-| Route                         | M      | Tier | Arguments                                                                                   |
-| ----------------------------- | ------ | ---- | ------------------------------------------------------------------------------------------- |
-| `/transactions`               | GET    | R    | `account_id` \| `account_ids[]`, `start`, `end`, `category_id`, `uncategorized`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `is_parent`, `is_child`, `has_schedule`, `transfer_only`, `limit`, `offset`, `order` |
-| `/transactions/:id`           | GET    | R    | — (with its splits)                                                                         |
-| `/transactions/earliest`      | GET    | R    | `account_id`                                                                                |
-| `/transactions/latest`        | GET    | R    | `account_id`                                                                                |
-| `/transactions/export`        | GET    | R    | same filters, `format=csv`                                                                  |
-| `/transactions`               | POST   | W    | `account_id`, `transactions[]`, `run_rules` (true), `learn_categories` (false), `dry_run`    |
-| `/transactions/import`        | POST   | W    | `account_id`, `transactions[]`, **the importer options of §11.7**, `dry_run`                 |
-| `/transactions/:id`           | PATCH  | W    | any field, plus `subtransactions[]` to split                                                |
-| `/transactions/bulk`          | PATCH  | W    | `ids[]` \| `filter{}`, `set{}`, `max_changes`, `dry_run`                                    |
-| `/transactions/categorize`    | POST   | W    | `ids[]` \| `filter{}`, `category_id`, `max_changes`, `dry_run`                              |
-| `/transactions/merge`         | POST   | W    | `keep_id`, `merge_ids[]`                                                                    |
-| `/transactions/move`          | POST   | W    | `ids[]`, `to_account_id`                                                                    |
-| `/transactions/:id`           | DELETE | **A** | `confirm_token`                                                                            |
-| `/transactions/bulk`          | DELETE | **A** | `ids[]`, `confirm_token`                                                                    |
+| Route                      | M      | Tier  | Arguments                                                                                                                                                                                                                                                                |
+| -------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/transactions`            | GET    | R     | `account_id` \| `account_ids[]`, `start`, `end`, `category_id`, `uncategorized`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `is_parent`, `is_child`, `has_schedule`, `transfer_only`, `limit`, `offset`, `order` |
+| `/transactions/:id`        | GET    | R     | — (with its splits)                                                                                                                                                                                                                                                      |
+| `/transactions/earliest`   | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
+| `/transactions/latest`     | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
+| `/transactions/export`     | GET    | R     | same filters, `format=csv`                                                                                                                                                                                                                                               |
+| `/transactions`            | POST   | W     | `account_id`, `transactions[]`, `run_rules` (true), `learn_categories` (false), `dry_run`                                                                                                                                                                                |
+| `/transactions/import`     | POST   | W     | `account_id`, `transactions[]`, **the importer options of §11.7**, `dry_run`                                                                                                                                                                                             |
+| `/transactions/:id`        | PATCH  | W     | any field, plus `subtransactions[]` to split                                                                                                                                                                                                                             |
+| `/transactions/bulk`       | PATCH  | W     | `ids[]` \| `filter{}`, `set{}`, `max_changes`, `dry_run`                                                                                                                                                                                                                 |
+| `/transactions/categorize` | POST   | W     | `ids[]` \| `filter{}`, `category_id`, `max_changes`, `dry_run`                                                                                                                                                                                                           |
+| `/transactions/merge`      | POST   | W     | `keep_id`, `merge_ids[]`                                                                                                                                                                                                                                                 |
+| `/transactions/move`       | POST   | W     | `ids[]`, `to_account_id`                                                                                                                                                                                                                                                 |
+| `/transactions/:id`        | DELETE | **A** | `confirm_token`                                                                                                                                                                                                                                                          |
+| `/transactions/bulk`       | DELETE | **A** | `ids[]`, `confirm_token`                                                                                                                                                                                                                                                 |
 
 Notes that matter:
 
@@ -896,20 +1005,20 @@ Notes that matter:
 
 ### 8.4 Categories and groups
 
-| Route                       | M      | Tier | Arguments                                              |
-| --------------------------- | ------ | ---- | ------------------------------------------------------ |
-| `/categories`               | GET    | R    | `include_hidden` (false), `group_id`                   |
-| `/categories/:id`           | GET    | R    | —                                                      |
-| `/categories`               | POST   | W    | `name`, `group_id`, `is_income` (false), `hidden`      |
-| `/categories/:id`           | PATCH  | W    | `name`, `group_id`, `hidden`                           |
-| `/categories/:id/move`      | POST   | W    | `to_index`, `group_id`                                 |
-| `/categories/:id`           | DELETE | **A** | `transfer_category_id`, `confirm_token`               |
-| `/categories/sort`          | POST   | W    | `ids[]`                                                |
-| `/category-groups`          | GET    | R    | `include_hidden`                                       |
-| `/category-groups`          | POST   | W    | `name`, `is_income`                                    |
-| `/category-groups/:id`      | PATCH  | W    | `name`, `hidden`                                       |
-| `/category-groups/:id/move` | POST   | W    | `to_index`                                             |
-| `/category-groups/:id`      | DELETE | **A** | `transfer_category_id`, `confirm_token`               |
+| Route                       | M      | Tier  | Arguments                                         |
+| --------------------------- | ------ | ----- | ------------------------------------------------- |
+| `/categories`               | GET    | R     | `include_hidden` (false), `group_id`              |
+| `/categories/:id`           | GET    | R     | —                                                 |
+| `/categories`               | POST   | W     | `name`, `group_id`, `is_income` (false), `hidden` |
+| `/categories/:id`           | PATCH  | W     | `name`, `group_id`, `hidden`                      |
+| `/categories/:id/move`      | POST   | W     | `to_index`, `group_id`                            |
+| `/categories/:id`           | DELETE | **A** | `transfer_category_id`, `confirm_token`           |
+| `/categories/sort`          | POST   | W     | `ids[]`                                           |
+| `/category-groups`          | GET    | R     | `include_hidden`                                  |
+| `/category-groups`          | POST   | W     | `name`, `is_income`                               |
+| `/category-groups/:id`      | PATCH  | W     | `name`, `hidden`                                  |
+| `/category-groups/:id/move` | POST   | W     | `to_index`                                        |
+| `/category-groups/:id`      | DELETE | **A** | `transfer_category_id`, `confirm_token`           |
 
 `DELETE /categories/:id` refuses without `transfer_category_id` when the category has transactions —
 `must-category-transfer` is the engine's own check, and the refusal names the count.
@@ -919,38 +1028,38 @@ Notes that matter:
 This is the family upstream's public `@actual-app/api` does **not** expose and that a budgeter uses
 every single month. It is the reason this spec exists in its current size.
 
-| Route                                             | M     | Tier | Arguments                                        |
-| ------------------------------------------------- | ----- | ---- | ------------------------------------------------ |
-| `/budget/months`                                  | GET   | R    | —                                                |
-| `/budget/bounds`                                  | GET   | R    | — (earliest and latest month with data)          |
-| `/budget/month/:month`                            | GET   | R    | `include_hidden`, `include_zero` — per category: `budgeted`, `spent`, `balance`, `carryover`, plus the month's `to_budget`, `income`, `total_spent` |
-| `/budget/month/:month/gaps`                       | GET   | R    | `min_spent` — categories with spending and **no budget entry** (R3 made into a route) |
-| `/budget/month/:month/category/:id`               | PATCH | W    | `amount` (cents) and/or `carryover` (bool)       |
-| `/budget/month/:month/set-zero`                   | POST  | W    | `dry_run`                                        |
-| `/budget/month/:month/copy-previous`              | POST  | W    | `dry_run`                                        |
-| `/budget/month/:month/copy-from`                  | POST  | W    | `from` (`YYYY-MM`), `dry_run`                    |
-| `/budget/month/:month/copy-until-year-end`        | POST  | W    | `dry_run`                                        |
-| `/budget/month/:month/set-average`                | POST  | W    | `months` (3 \| 6 \| 12 \| N), `category_ids[]`, `dry_run` |
-| `/budget/month/:month/cover-overspending`         | POST  | W    | `to_category_id`, `from_category_id`             |
-| `/budget/month/:month/cover-overbudgeted`         | POST  | W    | `from_category_id`                               |
-| `/budget/month/:month/transfer-category`          | POST  | W    | `from_category_id`, `to_category_id`, `amount`   |
-| `/budget/month/:month/transfer-available`         | POST  | W    | `to_category_id`, `amount`                       |
-| `/budget/month/:month/hold`                       | POST  | W    | `amount`                                         |
-| `/budget/month/:month/reset-hold`                 | POST  | W    | —                                                |
-| `/budget/month/:month/reset-income-carryover`     | POST  | W    | —                                                |
+| Route                                         | M     | Tier | Arguments                                                                                                                                           |
+| --------------------------------------------- | ----- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/budget/months`                              | GET   | R    | —                                                                                                                                                   |
+| `/budget/bounds`                              | GET   | R    | — (earliest and latest month with data)                                                                                                             |
+| `/budget/month/:month`                        | GET   | R    | `include_hidden`, `include_zero` — per category: `budgeted`, `spent`, `balance`, `carryover`, plus the month's `to_budget`, `income`, `total_spent` |
+| `/budget/month/:month/gaps`                   | GET   | R    | `min_spent` — categories with spending and **no budget entry** (R3 made into a route)                                                               |
+| `/budget/month/:month/category/:id`           | PATCH | W    | `amount` (cents) and/or `carryover` (bool)                                                                                                          |
+| `/budget/month/:month/set-zero`               | POST  | W    | `dry_run`                                                                                                                                           |
+| `/budget/month/:month/copy-previous`          | POST  | W    | `dry_run`                                                                                                                                           |
+| `/budget/month/:month/copy-from`              | POST  | W    | `from` (`YYYY-MM`), `dry_run`                                                                                                                       |
+| `/budget/month/:month/copy-until-year-end`    | POST  | W    | `dry_run`                                                                                                                                           |
+| `/budget/month/:month/set-average`            | POST  | W    | `months` (3 \| 6 \| 12 \| N), `category_ids[]`, `dry_run`                                                                                           |
+| `/budget/month/:month/cover-overspending`     | POST  | W    | `to_category_id`, `from_category_id`                                                                                                                |
+| `/budget/month/:month/cover-overbudgeted`     | POST  | W    | `from_category_id`                                                                                                                                  |
+| `/budget/month/:month/transfer-category`      | POST  | W    | `from_category_id`, `to_category_id`, `amount`                                                                                                      |
+| `/budget/month/:month/transfer-available`     | POST  | W    | `to_category_id`, `amount`                                                                                                                          |
+| `/budget/month/:month/hold`                   | POST  | W    | `amount`                                                                                                                                            |
+| `/budget/month/:month/reset-hold`             | POST  | W    | —                                                                                                                                                   |
+| `/budget/month/:month/reset-income-carryover` | POST  | W    | —                                                                                                                                                   |
 
 **Goal templates** — the `#template` notes budgeters keep on categories:
 
-| Route                                          | M     | Tier | Arguments                                   |
-| ---------------------------------------------- | ----- | ---- | ------------------------------------------- |
-| `/budget/templates/check`                      | GET   | R    | — (parse every template; report every error) |
-| `/budget/category/:id/template`                | GET   | R    | —                                           |
-| `/budget/category/:id/template`                | PUT   | W    | `lines[]` or `raw`                          |
-| `/budget/month/:month/templates/dry-run`       | POST  | R    | `category_ids[]` — what applying would set  |
-| `/budget/month/:month/templates/apply`         | POST  | W    | `category_ids[]`, `overwrite` (false), `dry_run` |
-| `/budget/month/:month/templates/cleanup`       | POST  | W    | `dry_run`                                   |
-| `/budget/category-automations`                 | GET   | R    | —                                           |
-| `/budget/category-automations`                 | PUT   | W    | `automations[]`                             |
+| Route                                    | M    | Tier | Arguments                                        |
+| ---------------------------------------- | ---- | ---- | ------------------------------------------------ |
+| `/budget/templates/check`                | GET  | R    | — (parse every template; report every error)     |
+| `/budget/category/:id/template`          | GET  | R    | —                                                |
+| `/budget/category/:id/template`          | PUT  | W    | `lines[]` or `raw`                               |
+| `/budget/month/:month/templates/dry-run` | POST | R    | `category_ids[]` — what applying would set       |
+| `/budget/month/:month/templates/apply`   | POST | W    | `category_ids[]`, `overwrite` (false), `dry_run` |
+| `/budget/month/:month/templates/cleanup` | POST | W    | `dry_run`                                        |
+| `/budget/category-automations`           | GET  | R    | —                                                |
+| `/budget/category-automations`           | PUT  | W    | `automations[]`                                  |
 
 `/budget/templates/check` is read-only and exists so a caller can report _"three of your templates
 don't parse, here they are"_ before touching a month.
@@ -959,83 +1068,83 @@ don't parse, here they are"_ before touching a month.
 
 **Payees**
 
-| Route                      | M      | Tier | Arguments                                      |
-| -------------------------- | ------ | ---- | ---------------------------------------------- |
-| `/payees`                  | GET    | R    | `search`, `include_transfer` (false), `common` |
-| `/payees/:id`              | GET    | R    | —                                              |
-| `/payees/orphaned`         | GET    | R    | — (payees with no transactions and no rule)    |
-| `/payees/:id/rules`        | GET    | R    | —                                              |
-| `/payees/rule-counts`      | GET    | R    | —                                              |
-| `/payees`                  | POST   | W    | `name`                                         |
-| `/payees/:id`              | PATCH  | W    | `name`, `favorite`, `learn_categories`         |
-| `/payees/merge`            | POST   | W    | `keep_id`, `merge_ids[]`, `dry_run`            |
-| `/payees/:id`              | DELETE | **A** | `confirm_token`                               |
-| `/payees/orphaned`         | DELETE | **A** | `confirm_token`                               |
+| Route                 | M      | Tier  | Arguments                                      |
+| --------------------- | ------ | ----- | ---------------------------------------------- |
+| `/payees`             | GET    | R     | `search`, `include_transfer` (false), `common` |
+| `/payees/:id`         | GET    | R     | —                                              |
+| `/payees/orphaned`    | GET    | R     | — (payees with no transactions and no rule)    |
+| `/payees/:id/rules`   | GET    | R     | —                                              |
+| `/payees/rule-counts` | GET    | R     | —                                              |
+| `/payees`             | POST   | W     | `name`                                         |
+| `/payees/:id`         | PATCH  | W     | `name`, `favorite`, `learn_categories`         |
+| `/payees/merge`       | POST   | W     | `keep_id`, `merge_ids[]`, `dry_run`            |
+| `/payees/:id`         | DELETE | **A** | `confirm_token`                                |
+| `/payees/orphaned`    | DELETE | **A** | `confirm_token`                                |
 
 **Tags**
 
-| Route             | M      | Tier | Arguments                |
-| ----------------- | ------ | ---- | ------------------------ |
-| `/tags`           | GET    | R    | `include_hidden`         |
-| `/tags/discover`  | GET    | R    | — (tags used in notes but not defined) |
-| `/tags`           | POST   | W    | `tag`, `color`, `description` |
-| `/tags/:id`       | PATCH  | W    | `tag`, `color`, `description`, `hidden` |
-| `/tags/rename`    | POST   | W    | `from`, `to`, `dry_run` — rewrites the notes that carry it |
-| `/tags/:id`       | DELETE | **A** | `confirm_token`         |
+| Route            | M      | Tier  | Arguments                                                  |
+| ---------------- | ------ | ----- | ---------------------------------------------------------- |
+| `/tags`          | GET    | R     | `include_hidden`                                           |
+| `/tags/discover` | GET    | R     | — (tags used in notes but not defined)                     |
+| `/tags`          | POST   | W     | `tag`, `color`, `description`                              |
+| `/tags/:id`      | PATCH  | W     | `tag`, `color`, `description`, `hidden`                    |
+| `/tags/rename`   | POST   | W     | `from`, `to`, `dry_run` — rewrites the notes that carry it |
+| `/tags/:id`      | DELETE | **A** | `confirm_token`                                            |
 
 **Rules** — the categorisation engine, and the reason imports land categorised
 
-| Route                   | M      | Tier | Arguments                                                      |
-| ----------------------- | ------ | ---- | -------------------------------------------------------------- |
-| `/rules`                | GET    | R    | `stage`, `payee_id`, `search`                                  |
-| `/rules/:id`            | GET    | R    | —                                                              |
-| `/rules/validate`       | POST   | R    | `rule` — parse and check without saving                        |
-| `/rules/preview`        | POST   | R    | `rule`, `limit` — which existing transactions this rule matches |
-| `/rules`                | POST   | W    | `rule`                                                         |
-| `/rules/:id`            | PATCH  | W    | `rule`                                                         |
-| `/rules/run`            | POST   | W    | `transaction_ids[]` \| `filter{}`, `max_changes`, `dry_run`    |
-| `/rules/payee-rename`   | POST   | W    | `from`, `to`                                                   |
-| `/rules/:id`            | DELETE | **A** | `confirm_token`                                               |
+| Route                 | M      | Tier  | Arguments                                                       |
+| --------------------- | ------ | ----- | --------------------------------------------------------------- |
+| `/rules`              | GET    | R     | `stage`, `payee_id`, `search`                                   |
+| `/rules/:id`          | GET    | R     | —                                                               |
+| `/rules/validate`     | POST   | R     | `rule` — parse and check without saving                         |
+| `/rules/preview`      | POST   | R     | `rule`, `limit` — which existing transactions this rule matches |
+| `/rules`              | POST   | W     | `rule`                                                          |
+| `/rules/:id`          | PATCH  | W     | `rule`                                                          |
+| `/rules/run`          | POST   | W     | `transaction_ids[]` \| `filter{}`, `max_changes`, `dry_run`     |
+| `/rules/payee-rename` | POST   | W     | `from`, `to`                                                    |
+| `/rules/:id`          | DELETE | **A** | `confirm_token`                                                 |
 
 `/rules/preview` is read-tier and is the route that makes rule authorship safe from a program: write
-the rule, see the 340 transactions it would touch, *then* save it.
+the rule, see the 340 transactions it would touch, _then_ save it.
 
 **Schedules**
 
-| Route                         | M      | Tier | Arguments                            |
-| ----------------------------- | ------ | ---- | ------------------------------------ |
-| `/schedules`                  | GET    | R    | `include_completed`, `upcoming_days` |
-| `/schedules/:id`              | GET    | R    | —                                    |
-| `/schedules/:id/upcoming`     | GET    | R    | `count` (default 5)                  |
-| `/schedules/discover`         | GET    | R    | — (recurring patterns not yet scheduled) |
-| `/schedules`                  | POST   | W    | `schedule`                           |
-| `/schedules/:id`              | PATCH  | W    | `schedule`                           |
-| `/schedules/:id/skip-next`    | POST   | W    | —                                    |
-| `/schedules/:id`              | DELETE | **A** | `confirm_token`                     |
+| Route                      | M      | Tier  | Arguments                                |
+| -------------------------- | ------ | ----- | ---------------------------------------- |
+| `/schedules`               | GET    | R     | `include_completed`, `upcoming_days`     |
+| `/schedules/:id`           | GET    | R     | —                                        |
+| `/schedules/:id/upcoming`  | GET    | R     | `count` (default 5)                      |
+| `/schedules/discover`      | GET    | R     | — (recurring patterns not yet scheduled) |
+| `/schedules`               | POST   | W     | `schedule`                               |
+| `/schedules/:id`           | PATCH  | W     | `schedule`                               |
+| `/schedules/:id/skip-next` | POST   | W     | —                                        |
+| `/schedules/:id`           | DELETE | **A** | `confirm_token`                          |
 
 **Notes** — notes are where `#tags` and `#template` goals live, so this is not a cosmetic family
 
-| Route         | M   | Tier | Arguments                                  |
-| ------------- | --- | ---- | ------------------------------------------ |
-| `/notes/:id`  | GET | R    | — (`id` is any entity's id)                |
-| `/notes/:id`  | PUT | W    | `note`                                     |
+| Route        | M   | Tier | Arguments                   |
+| ------------ | --- | ---- | --------------------------- |
+| `/notes/:id` | GET | R    | — (`id` is any entity's id) |
+| `/notes/:id` | PUT | W    | `note`                      |
 
 ### 8.7 Reports, dashboards and preferences
 
-| Route                          | M      | Tier | Notes                                      |
-| ------------------------------ | ------ | ---- | ------------------------------------------ |
-| `/reports`                     | GET    | R    | saved custom-report definitions            |
-| `/reports/:id`                 | GET    | R    | —                                          |
-| `/reports`                     | POST   | W    | `report`                                   |
-| `/reports/:id`                 | PATCH  | W    | `report`                                   |
-| `/reports/:id`                 | DELETE | **A** | `confirm_token`                           |
-| `/dashboards`                  | GET    | R    | —                                          |
-| `/dashboards/widgets`          | POST   | W    | `widget`                                   |
-| `/dashboards/widgets/:id`      | PATCH  | W    | `widget`                                   |
-| `/dashboards/widgets/:id`      | DELETE | W    | —                                          |
-| `/dashboards/reset`            | POST   | **A** | `confirm_token`                           |
-| `/preferences`                 | GET    | R    | synced preferences                         |
-| `/preferences`                 | PATCH  | W    | one or more keys                           |
+| Route                     | M      | Tier  | Notes                           |
+| ------------------------- | ------ | ----- | ------------------------------- |
+| `/reports`                | GET    | R     | saved custom-report definitions |
+| `/reports/:id`            | GET    | R     | —                               |
+| `/reports`                | POST   | W     | `report`                        |
+| `/reports/:id`            | PATCH  | W     | `report`                        |
+| `/reports/:id`            | DELETE | **A** | `confirm_token`                 |
+| `/dashboards`             | GET    | R     | —                               |
+| `/dashboards/widgets`     | POST   | W     | `widget`                        |
+| `/dashboards/widgets/:id` | PATCH  | W     | `widget`                        |
+| `/dashboards/widgets/:id` | DELETE | W     | —                               |
+| `/dashboards/reset`       | POST   | **A** | `confirm_token`                 |
+| `/preferences`            | GET    | R     | synced preferences              |
+| `/preferences`            | PATCH  | W     | one or more keys                |
 
 These store **definitions**, not data. The numbers a report renders come from §10, and that
 separation is deliberate: a caller that wants "spending by category" should not have to create a
@@ -1043,10 +1152,10 @@ widget to get it.
 
 ### 8.8 Bank sync (read-only surface)
 
-| Route                        | M    | Tier | Notes                                               |
-| ---------------------------- | ---- | ---- | --------------------------------------------------- |
+| Route                        | M    | Tier | Notes                                                                                    |
+| ---------------------------- | ---- | ---- | ---------------------------------------------------------------------------------------- |
 | `/banksync/status`           | GET  | R    | which providers are configured (GoCardless, SimpleFIN, Pluggy.ai, Enable Banking, Akahu) |
-| `/banksync/accounts/:id/run` | POST | W    | pull the linked account now (`accounts-bank-sync`)  |
+| `/banksync/accounts/:id/run` | POST | W    | pull the linked account now (`accounts-bank-sync`)                                       |
 
 **Linking a bank account is not on this plane.** It is an OAuth dance with a consent screen that has
 to happen in a browser, and a program driving it is a program phishing the operator. Status and
@@ -1054,11 +1163,11 @@ to happen in a browser, and a program driving it is a program phishing the opera
 
 ### 8.9 Admin
 
-| Route                | M    | Tier | Notes                                                  |
-| -------------------- | ---- | ---- | ------------------------------------------------------ |
+| Route                | M    | Tier  | Notes                                                                               |
+| -------------------- | ---- | ----- | ----------------------------------------------------------------------------------- |
 | `/admin/key/rotate`  | POST | **A** | mint a new machine key; response is the fingerprint only, and the hint says restart |
-| `/admin/cache/reset` | POST | **A** | `reset-budget-cache` — recompute the spreadsheet        |
-| `/admin/vacuum`      | POST | **A** | compact the database                                    |
+| `/admin/cache/reset` | POST | **A** | `reset-budget-cache` — recompute the spreadsheet                                    |
+| `/admin/vacuum`      | POST | **A** | compact the database                                                                |
 
 Every `DELETE` in this spec is admin-tier and is listed with its family rather than here, because a
 caller looks for "how do I delete a payee" under payees.
@@ -1070,46 +1179,46 @@ caller looks for "how do I delete a payee" under payees.
 This is the matrix the Goal is measured against. It is organised by where the action lives in the
 web UI, so it can be walked screen by screen.
 
-| UI screen / action                                  | Route                                              | Status |
-| ---------------------------------------------------- | -------------------------------------------------- | ------ |
-| **Budget page** — type an amount in a category cell | `PATCH /budget/month/:m/category/:id`              | ✅     |
-| Budget page — the rollover/carryover toggle          | same route, `carryover`                            | ✅     |
-| Budget page — "Copy last month's budget"             | `POST /budget/month/:m/copy-previous`              | ✅     |
-| Budget page — "Set budgets to 3/6/12 month average"  | `POST /budget/month/:m/set-average`                | ✅     |
-| Budget page — "Set budgets to zero"                  | `POST /budget/month/:m/set-zero`                   | ✅     |
-| Budget page — the red overspend arrow → cover from…  | `POST /budget/month/:m/cover-overspending`         | ✅     |
-| Budget page — move money between two categories      | `POST /budget/month/:m/transfer-category`          | ✅     |
-| Budget page — move "To Budget" into a category       | `POST /budget/month/:m/transfer-available`         | ✅     |
-| Budget page — hold for next month                    | `POST /budget/month/:m/hold`                       | ✅     |
-| Budget page — apply goal templates                   | `POST /budget/month/:m/templates/apply`            | ✅     |
-| Budget page — add / rename / hide / reorder category | `/categories` family                               | ✅     |
-| Budget page — add / rename / reorder group           | `/category-groups` family                          | ✅     |
-| **Accounts sidebar** — add account                   | `POST /accounts`                                   | ✅     |
-| Accounts sidebar — reorder, group                    | `/accounts/:id/move`, `/account-groups`            | ✅     |
-| **Account page** — the transaction list, any filter  | `GET /transactions`                                | ✅     |
-| Account page — add a transaction                     | `POST /transactions`                               | ✅     |
-| Account page — edit inline, including splits         | `PATCH /transactions/:id`                          | ✅     |
-| Account page — select many → set category            | `POST /transactions/categorize`                    | ✅     |
-| Account page — select many → delete                  | `DELETE /transactions/bulk` (admin)                | ✅     |
-| Account page — merge duplicates                      | `POST /transactions/merge`                         | ✅     |
-| Account page — move to another account               | `POST /transactions/move`                          | ✅     |
-| Account page — **Reconcile**                         | `/accounts/:id/reconcile/plan` + `/apply`          | ✅ (composed, §8.2) |
-| Account page — Import file                           | `POST /ingest/file/plan` + `/apply`                | ✅     |
-| Account page — Export CSV                            | `GET /transactions/export`                         | ✅     |
-| Account page — Close / reopen account                | `POST /accounts/:id/close` · `/reopen`             | ✅     |
-| Account page — Bank sync now                         | `POST /banksync/accounts/:id/run`                  | ✅     |
-| Account page — Link a bank account                   | —                                                  | ⛔ deliberate (§8.8) |
-| **Payees page** — rename, merge, delete orphans      | `/payees` family                                   | ✅     |
-| **Rules page** — create, edit, test, run             | `/rules` family, incl. `/rules/preview`            | ✅     |
-| **Schedules page** — create, skip, post, discover    | `/schedules` family                                | ✅     |
-| **Tags** — create, rename across notes, hide         | `/tags` family                                     | ✅     |
-| **Reports** — spending, cash flow, net worth, custom | `/analytics/*` for the numbers, `/reports` for the saved definitions | ✅ (§10) |
-| **Settings** — preferences                           | `PATCH /preferences`                               | ✅     |
-| Settings — export / import budget file               | `/budgets/:id/export`, `/budgets/import`           | ✅     |
-| Settings — backups                                   | `/budgets/:id/backups`, `/backup`, `/restore`      | ✅     |
-| Settings — encryption key, change password           | —                                                  | ⛔ deliberate |
-| Settings — repair / reset sync                       | —                                                  | ⛔ deliberate |
-| **Anywhere** — Ctrl-Z                                | `POST /undo`                                       | ✅     |
+| UI screen / action                                   | Route                                                                | Status               |
+| ---------------------------------------------------- | -------------------------------------------------------------------- | -------------------- |
+| **Budget page** — type an amount in a category cell  | `PATCH /budget/month/:m/category/:id`                                | ✅                   |
+| Budget page — the rollover/carryover toggle          | same route, `carryover`                                              | ✅                   |
+| Budget page — "Copy last month's budget"             | `POST /budget/month/:m/copy-previous`                                | ✅                   |
+| Budget page — "Set budgets to 3/6/12 month average"  | `POST /budget/month/:m/set-average`                                  | ✅                   |
+| Budget page — "Set budgets to zero"                  | `POST /budget/month/:m/set-zero`                                     | ✅                   |
+| Budget page — the red overspend arrow → cover from…  | `POST /budget/month/:m/cover-overspending`                           | ✅                   |
+| Budget page — move money between two categories      | `POST /budget/month/:m/transfer-category`                            | ✅                   |
+| Budget page — move "To Budget" into a category       | `POST /budget/month/:m/transfer-available`                           | ✅                   |
+| Budget page — hold for next month                    | `POST /budget/month/:m/hold`                                         | ✅                   |
+| Budget page — apply goal templates                   | `POST /budget/month/:m/templates/apply`                              | ✅                   |
+| Budget page — add / rename / hide / reorder category | `/categories` family                                                 | ✅                   |
+| Budget page — add / rename / reorder group           | `/category-groups` family                                            | ✅                   |
+| **Accounts sidebar** — add account                   | `POST /accounts`                                                     | ✅                   |
+| Accounts sidebar — reorder, group                    | `/accounts/:id/move`, `/account-groups`                              | ✅                   |
+| **Account page** — the transaction list, any filter  | `GET /transactions`                                                  | ✅                   |
+| Account page — add a transaction                     | `POST /transactions`                                                 | ✅                   |
+| Account page — edit inline, including splits         | `PATCH /transactions/:id`                                            | ✅                   |
+| Account page — select many → set category            | `POST /transactions/categorize`                                      | ✅                   |
+| Account page — select many → delete                  | `DELETE /transactions/bulk` (admin)                                  | ✅                   |
+| Account page — merge duplicates                      | `POST /transactions/merge`                                           | ✅                   |
+| Account page — move to another account               | `POST /transactions/move`                                            | ✅                   |
+| Account page — **Reconcile**                         | `/accounts/:id/reconcile/plan` + `/apply`                            | ✅ (composed, §8.2)  |
+| Account page — Import file                           | `POST /ingest/file/plan` + `/apply`                                  | ✅                   |
+| Account page — Export CSV                            | `GET /transactions/export`                                           | ✅                   |
+| Account page — Close / reopen account                | `POST /accounts/:id/close` · `/reopen`                               | ✅                   |
+| Account page — Bank sync now                         | `POST /banksync/accounts/:id/run`                                    | ✅                   |
+| Account page — Link a bank account                   | —                                                                    | ⛔ deliberate (§8.8) |
+| **Payees page** — rename, merge, delete orphans      | `/payees` family                                                     | ✅                   |
+| **Rules page** — create, edit, test, run             | `/rules` family, incl. `/rules/preview`                              | ✅                   |
+| **Schedules page** — create, skip, post, discover    | `/schedules` family                                                  | ✅                   |
+| **Tags** — create, rename across notes, hide         | `/tags` family                                                       | ✅                   |
+| **Reports** — spending, cash flow, net worth, custom | `/analytics/*` for the numbers, `/reports` for the saved definitions | ✅ (§10)             |
+| **Settings** — preferences                           | `PATCH /preferences`                                                 | ✅                   |
+| Settings — export / import budget file               | `/budgets/:id/export`, `/budgets/import`                             | ✅                   |
+| Settings — backups                                   | `/budgets/:id/backups`, `/backup`, `/restore`                        | ✅                   |
+| Settings — encryption key, change password           | —                                                                    | ⛔ deliberate        |
+| Settings — repair / reset sync                       | —                                                                    | ⛔ deliberate        |
+| **Anywhere** — Ctrl-Z                                | `POST /undo`                                                         | ✅                   |
 
 **The four deliberate omissions**, stated as decisions rather than gaps:
 
@@ -1146,25 +1255,25 @@ All read-tier. All take `start` and `end` (`YYYY-MM-DD`, inclusive), and optiona
 `account_ids[]`, `category_ids[]`, `exclude_category_ids[]`, `include_offbudget` (false),
 `include_transfers` (false).
 
-| Route                               | Extra arguments                        | Answers                                                                 |
-| ----------------------------------- | -------------------------------------- | ----------------------------------------------------------------------- |
-| `/analytics/spending-by-category`   | `interval` (month\|quarter\|year\|none), `group_by` (category\|group), `top_n` | the bar chart |
-| `/analytics/income-vs-expense`      | `interval`                             | in, out, net, per interval                                              |
-| `/analytics/cash-flow`              | `interval`                             | opening, in, out, closing, per interval                                 |
-| `/analytics/net-worth`              | `interval`                             | assets, liabilities, net, per interval, per account                     |
-| `/analytics/category-trend`         | `category_id`, `interval`              | one category over time, with mean and median                            |
-| `/analytics/payee-leaderboard`      | `top_n` (20), `direction` (out\|in)    | who got the money                                                       |
-| `/analytics/budget-performance`     | `months[]`                             | budgeted vs spent vs balance per category per month, and the variance   |
-| `/analytics/recurring`              | `min_occurrences` (3), `tolerance_days` (3) | detected subscriptions and their annualised cost                   |
-| `/analytics/runway`                 | `basis` (3\|6\|12 months)              | on-budget liquid balance ÷ trailing average outflow, in months          |
-| `/analytics/uncategorized-summary`  | —                                      | count and total of uncategorised, by account and by month               |
-| `/analytics/anomalies`              | `z` (2.0), `min_amount`                | categories and payees unusually far from their own trailing norm        |
+| Route                              | Extra arguments                                                                | Answers                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `/analytics/spending-by-category`  | `interval` (month\|quarter\|year\|none), `group_by` (category\|group), `top_n` | the bar chart                                                         |
+| `/analytics/income-vs-expense`     | `interval`                                                                     | in, out, net, per interval                                            |
+| `/analytics/cash-flow`             | `interval`                                                                     | opening, in, out, closing, per interval                               |
+| `/analytics/net-worth`             | `interval`                                                                     | assets, liabilities, net, per interval, per account                   |
+| `/analytics/category-trend`        | `category_id`, `interval`                                                      | one category over time, with mean and median                          |
+| `/analytics/payee-leaderboard`     | `top_n` (20), `direction` (out\|in)                                            | who got the money                                                     |
+| `/analytics/budget-performance`    | `months[]`                                                                     | budgeted vs spent vs balance per category per month, and the variance |
+| `/analytics/recurring`             | `min_occurrences` (3), `tolerance_days` (3)                                    | detected subscriptions and their annualised cost                      |
+| `/analytics/runway`                | `basis` (3\|6\|12 months)                                                      | on-budget liquid balance ÷ trailing average outflow, in months        |
+| `/analytics/uncategorized-summary` | —                                                                              | count and total of uncategorised, by account and by month             |
+| `/analytics/anomalies`             | `z` (2.0), `min_amount`                                                        | categories and payees unusually far from their own trailing norm      |
 
 ### 10.3 The rules these obey
 
 - **Every figure is integer cents**, and every count is an integer. No percentages are returned as
-  floats — a share is returned as its two integers (`amount` and `total`) and the *presentation
-  layer* divides.
+  floats — a share is returned as its two integers (`amount` and `total`) and the _presentation
+  layer_ divides.
 - **Transfers are excluded by default.** Counting a transfer from Checking to Savings as spending
   is the classic way a personal-finance tool doubles someone's expenses. `include_transfers: true`
   exists, and the response always echoes which it did.
@@ -1184,14 +1293,14 @@ All read-tier. All take `start` and `end` (`YYYY-MM-DD`, inclusive), and optiona
 ## 11. The ingest plane — statements into the budget
 
 The flagship. cli.mdx §10 describes the operator-facing pipeline; **this section is the engine
-behind it**, and it has one significant addition cli.mdx does not have: the *prepared tree*.
+behind it**, and it has one significant addition cli.mdx does not have: the _prepared tree_.
 
 ### 11.1 Two modes, because two kinds of tree exist
 
-| Mode           | Input                                                                 | What we do                               |
-| -------------- | --------------------------------------------------------------------- | ---------------------------------------- |
-| **`prepared`** | a tree that already holds importable files (`.ofx` / `.qfx` / `.csv` / `.qif` / CAMT `.xml`) and a manifest describing them | read the manifest, hand the files to Actual's own parser, import |
-| **`raw`**      | a tree of statement PDFs and text sidecars                            | extract → normalise → de-duplicate → stage → import (cli.mdx §10) |
+| Mode           | Input                                                                                                                       | What we do                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **`prepared`** | a tree that already holds importable files (`.ofx` / `.qfx` / `.csv` / `.qif` / CAMT `.xml`) and a manifest describing them | read the manifest, hand the files to Actual's own parser, import  |
+| **`raw`**      | a tree of statement PDFs and text sidecars                                                                                  | extract → normalise → de-duplicate → stage → import (cli.mdx §10) |
 
 **`prepared` is the primary mode and is built first**, because a real archive is usually already
 prepared: someone's export pipeline, their bank's own downloads, or a previous extraction run has
@@ -1200,7 +1309,7 @@ bank's own id is the best dedupe key that will ever exist for that row.
 
 `raw` is for the statements that only ever existed as paper.
 
-**A note on where the prepared tree's own conventions come from.** A prepared tree is *not ours*. It
+**A note on where the prepared tree's own conventions come from.** A prepared tree is _not ours_. It
 was produced by whatever pipeline the operator ran, it is audit evidence, and this plane treats it as
 **strictly read-only** — we never write into it, never move a file in it, and never rewrite its
 manifest. §11.3's staging directory is the only place we write, and §11.2's conflict rule exists
@@ -1212,32 +1321,48 @@ A prepared tree describes itself with a manifest — a CSV (or JSON) with one ro
 route does not care what produced it; it cares about these columns, and it reports any it could not
 find rather than guessing:
 
-| Column                                | Required | Meaning                                                |
-| ------------------------------------- | -------- | ------------------------------------------------------ |
-| `entity`                              | ✅       | the legal person or company the account belongs to     |
-| `institution`                         | ✅       | the bank                                               |
-| `label`                               | ✅       | the account's name in the archive                      |
-| `last4`                               | ✅       | the account number's last four digits                  |
-| `kind`                                | ✅       | `checking` · `savings` · `card` · `brokerage` · `loan` |
-| `path`                                | ✅       | the account's directory, relative to the tree root     |
-| `transactions`, `statements`, `first`, `last` | —  | counts and coverage, used for the plan's preview       |
-| `reconciled`, `recon_na`              | —        | how many statements balanced; surfaced as a warning    |
+| Column                                        | Required | Meaning                                                |
+| --------------------------------------------- | -------- | ------------------------------------------------------ |
+| `entity`                                      | ✅       | the legal person or company the account belongs to     |
+| `institution`                                 | ✅       | the bank                                               |
+| `label`                                       | ✅       | the account's name in the archive                      |
+| `last4`                                       | ✅       | the account number's last four digits                  |
+| `kind`                                        | ✅       | `checking` · `savings` · `card` · `brokerage` · `loan` |
+| `path`                                        | ✅       | the account's directory, relative to the tree root     |
+| `transactions`, `statements`, `first`, `last` | —        | counts and coverage, used for the plan's preview       |
+| `reconciled`, `recon_na`                      | —        | how many statements balanced; surfaced as a warning    |
 
 ```jsonc
 // GET /ingest/manifest?root=…   (read)
-{ "ok": true, "data": {
-  "root": "{STATEMENTS_ROOT}",           // resolved from the credentials file unless overridden
-  "manifest_path": "import/accounts.csv",
-  "mode": "prepared",
-  "accounts": [
-    { "entity": "household", "institution": "Northbank", "label": "Checking_x4021", "last4": "4021",
-      "kind": "checking", "path": "bank/household/Northbank/Checking_x4021",
-      "statements": 21, "transactions": 368, "first": "2024-10", "last": "2026-06",
-      "files": { "combined": "Checking_x4021_ALL.ofx", "monthly": 21, "formats": ["ofx", "csv"] },
-      "warnings": [] }
-  ],
-  "totals": { "accounts": 27, "transactions": 12007, "unreconciled": 12 }
-} }
+{
+  "ok": true,
+  "data": {
+    "root": "{STATEMENTS_ROOT}", // resolved from the credentials file unless overridden
+    "manifest_path": "import/accounts.csv",
+    "mode": "prepared",
+    "accounts": [
+      {
+        "entity": "household",
+        "institution": "Northbank",
+        "label": "Checking_x4021",
+        "last4": "4021",
+        "kind": "checking",
+        "path": "bank/household/Northbank/Checking_x4021",
+        "statements": 21,
+        "transactions": 368,
+        "first": "2024-10",
+        "last": "2026-06",
+        "files": {
+          "combined": "Checking_x4021_ALL.ofx",
+          "monthly": 21,
+          "formats": ["ofx", "csv"],
+        },
+        "warnings": [],
+      },
+    ],
+    "totals": { "accounts": 27, "transactions": 12007, "unreconciled": 12 },
+  },
+}
 ```
 
 **Conflict rule (LOCKED).** If the manifest's own directory is named `import/`, the staging
@@ -1271,26 +1396,26 @@ collision is not a bug we are willing to have once.
 
 ### 11.4 The routes
 
-| Route                       | M    | Tier | Arguments                                                        |
-| --------------------------- | ---- | ---- | ---------------------------------------------------------------- |
-| `/ingest/roots`             | GET  | R    | — configured statement roots and whether each is readable        |
-| `/ingest/manifest`          | GET  | R    | `root`, `manifest_path`                                          |
-| `/ingest/scan`              | POST | R    | `root`, `mode`, `entity`, `institution`, `account`, `year`       |
-| `/ingest/coverage`          | GET  | R    | `root`, `account` — which account-months are present and missing  |
-| `/ingest/map`               | GET  | R    | `root` — the current statements→budget map                       |
-| `/ingest/map`               | PUT  | W    | `root`, `map` — write it back beside the statements, not in the repo |
-| `/ingest/map/infer`         | POST | R    | `root`, `strategy` — propose a mapping; never saves it           |
-| `/ingest/accounts/plan`     | POST | R    | `root`, `naming`, `on_budget_kinds[]` — §12                      |
-| `/ingest/accounts/apply`    | POST | W    | `confirm_token`, `dry_run`                                       |
-| `/ingest/extract`           | POST | R*   | `root`, `force` — **raw mode only**; writes to staging only      |
-| `/ingest/dupes`             | GET  | R    | `root` — what both de-dupe layers collapsed, and why             |
-| `/ingest/rows`              | GET  | R    | `root`, `account`, `start`, `end`, `limit`                       |
-| `/ingest/plan`              | POST | R    | `root`, `accounts[]`, `start`, `end`, the §11.7 options          |
-| `/ingest/apply`             | POST | W    | `confirm_token`, `max_changes`, `dry_run`                        |
-| `/ingest/file/plan`         | POST | R    | `account_id`, `path` — one file, the "Import" button             |
-| `/ingest/file/apply`        | POST | W    | `confirm_token`, `dry_run`                                       |
-| `/ingest/runs`              | GET  | R    | the run log                                                      |
-| `/ingest/runs/:id`          | GET  | R    | one run's full report                                            |
+| Route                    | M    | Tier | Arguments                                                            |
+| ------------------------ | ---- | ---- | -------------------------------------------------------------------- |
+| `/ingest/roots`          | GET  | R    | — configured statement roots and whether each is readable            |
+| `/ingest/manifest`       | GET  | R    | `root`, `manifest_path`                                              |
+| `/ingest/scan`           | POST | R    | `root`, `mode`, `entity`, `institution`, `account`, `year`           |
+| `/ingest/coverage`       | GET  | R    | `root`, `account` — which account-months are present and missing     |
+| `/ingest/map`            | GET  | R    | `root` — the current statements→budget map                           |
+| `/ingest/map`            | PUT  | W    | `root`, `map` — write it back beside the statements, not in the repo |
+| `/ingest/map/infer`      | POST | R    | `root`, `strategy` — propose a mapping; never saves it               |
+| `/ingest/accounts/plan`  | POST | R    | `root`, `naming`, `on_budget_kinds[]` — §12                          |
+| `/ingest/accounts/apply` | POST | W    | `confirm_token`, `dry_run`                                           |
+| `/ingest/extract`        | POST | R\*  | `root`, `force` — **raw mode only**; writes to staging only          |
+| `/ingest/dupes`          | GET  | R    | `root` — what both de-dupe layers collapsed, and why                 |
+| `/ingest/rows`           | GET  | R    | `root`, `account`, `start`, `end`, `limit`                           |
+| `/ingest/plan`           | POST | R    | `root`, `accounts[]`, `start`, `end`, the §11.7 options              |
+| `/ingest/apply`          | POST | W    | `confirm_token`, `max_changes`, `dry_run`                            |
+| `/ingest/file/plan`      | POST | R    | `account_id`, `path` — one file, the "Import" button                 |
+| `/ingest/file/apply`     | POST | W    | `confirm_token`, `dry_run`                                           |
+| `/ingest/runs`           | GET  | R    | the run log                                                          |
+| `/ingest/runs/:id`       | GET  | R    | one run's full report                                                |
 
 `R*` — `/ingest/extract` is budget-read (it cannot change a ledger) but it does write to the staging
 directory. It is the one read-tier route that touches disk, it says so here, and it has its own
@@ -1299,10 +1424,10 @@ ceiling.
 ### 11.5 Two layers of de-duplication
 
 **Layer one, the statement level.** The same month scanned twice, under two filenames, is one
-statement. Grouping is on `(entity, institution, last4, statement_period)` read from *inside* the
+statement. Grouping is on `(entity, institution, last4, statement_period)` read from _inside_ the
 document, never from the directory name. Identical bytes → `duplicate_identical`. Different bytes,
 same period → ranked by source quality, the loser marked `superseded`, and both recorded. Two
-statements that disagree about a *transaction* → `conflict`, which blocks that account and names
+statements that disagree about a _transaction_ → `conflict`, which blocks that account and names
 both files. Parsing both is how an archive doubles a month.
 
 **Layer two, the transaction level.** A deterministic `imported_id` per row, which is what makes a
@@ -1315,7 +1440,7 @@ re-run idempotent.
 
 **The ordinal is scoped to the statement, and the scope is the whole trick.** Two genuine $5.00
 coffees on the same day at the same shop get ordinals 0 and 1, so they get two ids and both import.
-The scope must be the *statement*, not the calendar month, because cycle-dated accounts (a card
+The scope must be the _statement_, not the calendar month, because cycle-dated accounts (a card
 running the 15th to the 14th) feed one calendar month from two statements, and month-scoped ordinals
 would renumber them into collisions on a re-run. There is a fixture for exactly this.
 
@@ -1344,11 +1469,11 @@ the change set; if the budget moved underneath it, the apply refuses with the ne
 Two of Actual's defaults are wrong for a bulk archive import, and both are pinned here rather than
 left to a caller:
 
-| Option              | Default | **Ours** | Why                                                                                                  |
-| ------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `reimportDeleted`   | `true`  | **`false`** | The operator deleted that row on purpose. An import that resurrects deleted transactions on every run is an import nobody runs twice. Overridable per call, and the override is named in the response. |
-| `strictIdChecking`  | `false` | **`true`**  | Loose matching lets two statement rows one day and one cent apart match each other. With real ids present, strict is correct and the fuzzy fallback is a liability. |
-| `defaultCleared`    | `true`  | `true`   | A row that appeared on a statement has cleared. That is what a statement is.                          |
+| Option             | Default | **Ours**    | Why                                                                                                                                                                                                    |
+| ------------------ | ------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reimportDeleted`  | `true`  | **`false`** | The operator deleted that row on purpose. An import that resurrects deleted transactions on every run is an import nobody runs twice. Overridable per call, and the override is named in the response. |
+| `strictIdChecking` | `false` | **`true`**  | Loose matching lets two statement rows one day and one cent apart match each other. With real ids present, strict is correct and the fuzzy fallback is a liability.                                    |
+| `defaultCleared`   | `true`  | `true`      | A row that appeared on a statement has cleared. That is what a statement is.                                                                                                                           |
 
 `imported_payee` carries the **raw** description, unmodified, and `notes` is **left alone** — it is
 the operator's field, and an import that overwrites a note they typed has destroyed the only data in
@@ -1378,27 +1503,60 @@ Reads the manifest, reads the budget's existing accounts, and returns a per-row 
 reasoning. It **creates nothing**.
 
 ```jsonc
-{ "ok": true, "data": {
-  "plan": [
-    { "manifest": { "entity": "household", "institution": "Northbank", "label": "Checking_x4021", "last4": "4021", "kind": "checking" },
-      "action": "create",
-      "proposed": { "name": "Household · Northbank Checking ••4021", "type": "checking", "offbudget": false },
-      "reason": "no existing account matched on last4 or name" },
+{
+  "ok": true,
+  "data": {
+    "plan": [
+      {
+        "manifest": {
+          "entity": "household",
+          "institution": "Northbank",
+          "label": "Checking_x4021",
+          "last4": "4021",
+          "kind": "checking",
+        },
+        "action": "create",
+        "proposed": {
+          "name": "Household · Northbank Checking ••4021",
+          "type": "checking",
+          "offbudget": false,
+        },
+        "reason": "no existing account matched on last4 or name",
+      },
 
-    { "manifest": { "entity": "household", "institution": "Meridian", "label": "Retirement", "kind": "brokerage" },
-      "action": "create",
-      "proposed": { "name": "Household · Meridian Retirement", "type": "other", "offbudget": true },
-      "reason": "kind=brokerage → off-budget by the on_budget_kinds rule",
-      "warnings": ["source is monthly aggregate, not per-trade"] },
+      {
+        "manifest": {
+          "entity": "household",
+          "institution": "Meridian",
+          "label": "Retirement",
+          "kind": "brokerage",
+        },
+        "action": "create",
+        "proposed": {
+          "name": "Household · Meridian Retirement",
+          "type": "other",
+          "offbudget": true,
+        },
+        "reason": "kind=brokerage → off-budget by the on_budget_kinds rule",
+        "warnings": ["source is monthly aggregate, not per-trade"],
+      },
 
-    { "manifest": { "entity": "acme_llc", "institution": "Northbank", "label": "Checking_x7734", "last4": "7734" },
-      "action": "link",
-      "existing": { "id": "5a0e…", "name": "Acme LLC Checking" },
-      "reason": "matched on last4 7734" }
-  ],
-  "summary": { "create": 24, "link": 3, "ambiguous": 0 },
-  "confirm_token": "cf_01J8…"
-} }
+      {
+        "manifest": {
+          "entity": "acme_llc",
+          "institution": "Northbank",
+          "label": "Checking_x7734",
+          "last4": "7734",
+        },
+        "action": "link",
+        "existing": { "id": "5a0e…", "name": "Acme LLC Checking" },
+        "reason": "matched on last4 7734",
+      },
+    ],
+    "summary": { "create": 24, "link": 3, "ambiguous": 0 },
+    "confirm_token": "cf_01J8…",
+  },
+}
 ```
 
 `action` is one of `create` · `link` · `skip` · `ambiguous`. **`ambiguous` never becomes a create.**
@@ -1407,7 +1565,7 @@ accounts sharing a last4 across two entities is the normal case in a real archiv
 
 ### 12.2 The naming rule
 
-The default is `"{Entity} · {Institution} {Kind} ••{last4}"`, and it is a *default*, overridable per
+The default is `"{Entity} · {Institution} {Kind} ••{last4}"`, and it is a _default_, overridable per
 call with a `naming` template and per row with an explicit `name`. Three properties matter:
 
 - **It disambiguates.** Two entities both bank at the same institution and both have a Checking; without the
@@ -1418,13 +1576,13 @@ call with a `naming` template and per row with an explicit `name`. Three propert
 
 ### 12.3 On-budget versus off-budget
 
-| `kind`      | Default          | Why                                                                         |
-| ----------- | ---------------- | ---------------------------------------------------------------------------- |
-| `checking`  | on-budget        | money you spend                                                              |
-| `savings`   | on-budget        | still yours to allocate                                                      |
-| `card`      | on-budget, `type: credit` | the liability belongs in the budget; the balance is negative        |
-| `brokerage` | **off-budget**   | market movement is not income and would wreck every report                   |
-| `loan`      | **off-budget**   | tracked for net worth, not budgeted against                                  |
+| `kind`      | Default                   | Why                                                          |
+| ----------- | ------------------------- | ------------------------------------------------------------ |
+| `checking`  | on-budget                 | money you spend                                              |
+| `savings`   | on-budget                 | still yours to allocate                                      |
+| `card`      | on-budget, `type: credit` | the liability belongs in the budget; the balance is negative |
+| `brokerage` | **off-budget**            | market movement is not income and would wreck every report   |
+| `loan`      | **off-budget**            | tracked for net worth, not budgeted against                  |
 
 Controlled by `on_budget_kinds[]`, echoed in the response, and explained per row in `reason`. Getting
 this wrong is not a small mistake: a brokerage account marked on-budget turns every market swing into
@@ -1447,15 +1605,15 @@ deliberate act.
 `POST /query` takes one ActualQL query. It exists so a question nobody anticipated does not require a
 new route, and it is guarded so it cannot become a back door.
 
-| Guard              | Rule                                                                             |
-| ------------------ | -------------------------------------------------------------------------------- |
-| Read-only          | `SELECT` shape only. No mutation verb parses.                                    |
-| Single statement   | One query per call; a `;` is a parse error, not a second statement               |
-| Table allowlist    | `transactions` · `accounts` · `categories` · `category_groups` · `payees` · `schedules` · `rules` · `tags` · `zero_budgets` · `reflect_budgets` |
-| Denied, by name    | anything holding a secret or a sync internal; the refusal **names the typed route that does expose it** |
-| Row cap            | `limit`, default 200, cap 5,000, clamped and reported                            |
-| Byte cap           | 1 MiB; over it, `truncated` and a narrowing hint                                 |
-| Timeout            | 10 s                                                                             |
+| Guard            | Rule                                                                                                                                            |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read-only        | `SELECT` shape only. No mutation verb parses.                                                                                                   |
+| Single statement | One query per call; a `;` is a parse error, not a second statement                                                                              |
+| Table allowlist  | `transactions` · `accounts` · `categories` · `category_groups` · `payees` · `schedules` · `rules` · `tags` · `zero_budgets` · `reflect_budgets` |
+| Denied, by name  | anything holding a secret or a sync internal; the refusal **names the typed route that does expose it**                                         |
+| Row cap          | `limit`, default 200, cap 5,000, clamped and reported                                                                                           |
+| Byte cap         | 1 MiB; over it, `truncated` and a narrowing hint                                                                                                |
+| Timeout          | 10 s                                                                                                                                            |
 
 `GET /schema` returns the tables and fields the allowlist permits, with types, **so a caller does not
 guess.** A model that has read `/schema` writes a query that runs; a model that has not writes three
@@ -1478,7 +1636,7 @@ value is a **signed integer number of cents**. Negative is money out.
   in a budget is a wrong number in somebody's life.
 - **No decimal strings on the wire either.** `"123.50"` invites a parse on the other side, and the
   other side is sometimes a language model.
-- The **only** conversion point is `money.ts`, and the *clients* call it for display. `--format json`
+- The **only** conversion point is `money.ts`, and the _clients_ call it for display. `--format json`
   and every MCP response carry the raw integer.
 - A test round-trips a list of adversarial values — `-1`, `0`, `1`, `99`, `-99`, `100000000`,
   `Number.MAX_SAFE_INTEGER` — through every layer.
@@ -1494,8 +1652,8 @@ The same rule applies everywhere absence is possible: a balance we could not com
 row of zeros; an account with no transactions has `balance: 0` (which is a real balance) and
 `first_transaction: null` (which is a real absence).
 
-`GET /budget/month/:m/gaps` exists to turn this rule into an answer: *these categories have spending
-and no budget entry*, which is the most useful single question on a budget page.
+`GET /budget/month/:m/gaps` exists to turn this rule into an answer: _these categories have spending
+and no budget entry_, which is the most useful single question on a budget page.
 
 ### 14.3 Dates
 
@@ -1529,14 +1687,14 @@ never a silent pick of the first.
   `Accept: application/json` they simply take as long as they take, and **there is no server-side
   timeout on them**.
 
-| Limit                     | Value       | Behaviour over it                     |
-| ------------------------- | ----------- | ------------------------------------- |
-| `limit` on a list         | cap 5,000   | clamped, `truncated: true`            |
-| Response bytes            | 8 MiB       | `truncated: true` + narrowing hint    |
-| Request bytes             | 8 MiB       | `invalid_input`                       |
-| `max_changes` on a write  | default 200 | `conflict`, **reporting the real count** |
-| Per-call timeout          | 30 s        | `upstream_error`; ingest routes exempt |
-| `/query` timeout          | 10 s        | `upstream_error`                      |
+| Limit                    | Value       | Behaviour over it                        |
+| ------------------------ | ----------- | ---------------------------------------- |
+| `limit` on a list        | cap 5,000   | clamped, `truncated: true`               |
+| Response bytes           | 8 MiB       | `truncated: true` + narrowing hint       |
+| Request bytes            | 8 MiB       | `invalid_input`                          |
+| `max_changes` on a write | default 200 | `conflict`, **reporting the real count** |
+| Per-call timeout         | 30 s        | `upstream_error`; ingest routes exempt   |
+| `/query` timeout         | 10 s        | `upstream_error`                         |
 
 ---
 
@@ -1544,16 +1702,16 @@ never a silent pick of the first.
 
 ### 16.1 Threat model
 
-| # | Threat                                          | Control                                                     |
-| - | ------------------------------------------------ | ----------------------------------------------------------- |
-| 1 | Another computer reaches port 5006              | Gate 1, on the real socket address, not `X-Forwarded-For`   |
-| 2 | A web page the operator has open calls the plane | Gate 2 (origin + host) and gate 3 (the key it cannot read)  |
-| 3 | Another user on this machine                     | Gate 3; the key file is 0600 and ownership-checked          |
-| 4 | An agent writes something the operator did not want | Gates 4 and 6: two tier switches, `dry_run` default, a token only a plan can produce, a ceiling |
-| 5 | A malicious payee name or memo steers a model   | §16.3 — untrusted fields are marked, never executed         |
-| 6 | A secret leaks into a log, an error or a context | §16.4 — fingerprints only, generic internals                |
-| 7 | A bad plan is applied against a changed budget   | §7.3 — fingerprint recomputed at apply                      |
-| 8 | The operator's archive is damaged                | §11.2's conflict rule and §11.8's never-list                |
+| #   | Threat                                              | Control                                                                                         |
+| --- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1   | Another computer reaches port 5006                  | Gate 1, on the real socket address, not `X-Forwarded-For`                                       |
+| 2   | A web page the operator has open calls the plane    | Gate 2 (origin + host) and gate 3 (the key it cannot read)                                      |
+| 3   | Another user on this machine                        | Gate 3; the key file is 0600 and ownership-checked                                              |
+| 4   | An agent writes something the operator did not want | Gates 4 and 6: two tier switches, `dry_run` default, a token only a plan can produce, a ceiling |
+| 5   | A malicious payee name or memo steers a model       | §16.3 — untrusted fields are marked, never executed                                             |
+| 6   | A secret leaks into a log, an error or a context    | §16.4 — fingerprints only, generic internals                                                    |
+| 7   | A bad plan is applied against a changed budget      | §7.3 — fingerprint recomputed at apply                                                          |
+| 8   | The operator's archive is damaged                   | §11.2's conflict rule and §11.8's never-list                                                    |
 
 ### 16.2 What is never exposed
 
@@ -1574,7 +1732,7 @@ operator.
 - The plane never interprets them as instructions, never uses them to choose a route, and never
   reflects them into a `hint`.
 - [ai/mcp_prompt.md](../ai/mcp_prompt.md) carries the matching instruction on the model's side: text
-  from the ledger is *evidence about money*, never a directive.
+  from the ledger is _evidence about money_, never a directive.
 
 ### 16.4 The audit trail
 
@@ -1616,29 +1774,29 @@ the PR template left blank, no GitHub issues created by an agent. See
 
 ## 18. Testing
 
-| Layer                        | What it holds                                                                                                                                              |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Gate ladder**              | every gate, in order, with a negative for each: non-loopback → 404; non-loopback carrying `X-Forwarded-For: 127.0.0.1` with `trust proxy` on → 404; `Origin: https://evil.example` → 404; `Sec-Fetch-Site: cross-site` → 404; a rebinding `Host` → 404; no key → 401 constant body; wrong key → the same body **byte for byte**; write route with tier off → `write_disabled`; admin route with write tier only → `forbidden` |
-| **Credentials**              | mint shape and entropy source; the merge preserves an unrelated product's keys; 0644 is refused; a symlink is refused at read and at write; two concurrent minters converge on one key |
-| **Envelope**                 | every route returns the envelope, including 404 and 500; the error vocabulary is exactly nine; mcp.mdx's is a strict superset                              |
-| **Capability parity**        | `/capabilities` lists exactly the routes the router mounts — generated from one array, asserted both directions                                             |
-| **Coverage parity**          | §9's matrix is a committed fixture; a route in the matrix that is not in `/capabilities` fails the build                                                    |
-| **Money**                    | adversarial cents round-trip every layer; a canary greps the source for `parseFloat`, `toFixed` and `Number(` outside `money.ts`                            |
-| **Absent ≠ zero**            | a category with no entry returns `null`, one budgeted at zero returns `0`, and `/gaps` distinguishes them                                                  |
-| **Write protocol**           | dry run defaults true; a write without a token is refused; an expired token is refused; a token whose fingerprint no longer matches is refused **with the new counts**; the ceiling refuses and reports the real number |
-| **plan ≡ apply**             | over an unchanged budget, `/ingest/plan` and `/ingest/apply` report identical counts, because they are one call differing in a boolean                     |
-| **Importer options**         | `reimportDeleted: false` — import, delete through the app, re-run, assert it is **not** back; then assert the override brings it back and names it. `strictIdChecking: true` — two rows one day and one cent apart never match |
-| **`notes` untouched**        | write a note, re-run so the row updates, assert the note survives byte for byte                                                                            |
-| **Ordinal scope**            | a cycle-dated fixture whose statements run the 15th to the 14th, with two identical same-day amounts arriving from two statements in one calendar month, produces two ids and both import |
-| **Determinism**              | the whole pipeline twice over the fixture tree — `_rows.csv` byte-identical, second apply reports `added: 0`                                               |
-| **Manifest conflict**        | a tree whose manifest lives in `import/` refuses to stage there and returns `conflict` naming both paths                                                    |
-| **Provisioning**             | 27 fixture rows across 5 entities with two accounts sharing a last4 → exactly one `ambiguous`, zero silent creates; re-running yields `link`, never a duplicate set |
-| **Analytics**                | each route against a fixture budget with a hand-computed expected answer; transfers excluded by default and the exclusion echoed; off-budget excluded by default |
-| **Undo**                     | every write route, followed by `/undo`, returns the budget to its prior state under a full-table hash                                                       |
-| **Query guard**              | a mutation verb, a second statement, a denied table, an over-cap result — each refused or clamped as specified, and the denied-table refusal names the typed route |
-| **Leak canary**              | every route in `/capabilities` called against a fixture; responses grepped for the key pattern, `secret`, `password`, `/Users/`                             |
-| **Open-source canaries**     | the three §17 greps                                                                                                                                        |
-| **Integration**              | a real sync server on an ephemeral port, a temp state dir and a temp credentials file; the full ladder end to end                                            |
+| Layer                    | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Gate ladder**          | every gate, in order, with a negative for each: non-loopback → 404; non-loopback carrying `X-Forwarded-For: 127.0.0.1` with `trust proxy` on → 404; `Origin: https://evil.example` → 404; `Sec-Fetch-Site: cross-site` → 404; a rebinding `Host` → 404; no key → 401 constant body; wrong key → the same body **byte for byte**; write route with tier off → `write_disabled`; admin route with write tier only → `forbidden` |
+| **Credentials**          | mint shape and entropy source; the merge preserves an unrelated product's keys; 0644 is refused; a symlink is refused at read and at write; two concurrent minters converge on one key                                                                                                                                                                                                                                        |
+| **Envelope**             | every route returns the envelope, including 404 and 500; the error vocabulary is exactly nine; mcp.mdx's is a strict superset                                                                                                                                                                                                                                                                                                 |
+| **Capability parity**    | `/capabilities` lists exactly the routes the router mounts — generated from one array, asserted both directions                                                                                                                                                                                                                                                                                                               |
+| **Coverage parity**      | §9's matrix is a committed fixture; a route in the matrix that is not in `/capabilities` fails the build                                                                                                                                                                                                                                                                                                                      |
+| **Money**                | adversarial cents round-trip every layer; a canary greps the source for `parseFloat`, `toFixed` and `Number(` outside `money.ts`                                                                                                                                                                                                                                                                                              |
+| **Absent ≠ zero**        | a category with no entry returns `null`, one budgeted at zero returns `0`, and `/gaps` distinguishes them                                                                                                                                                                                                                                                                                                                     |
+| **Write protocol**       | dry run defaults true; a write without a token is refused; an expired token is refused; a token whose fingerprint no longer matches is refused **with the new counts**; the ceiling refuses and reports the real number                                                                                                                                                                                                       |
+| **plan ≡ apply**         | over an unchanged budget, `/ingest/plan` and `/ingest/apply` report identical counts, because they are one call differing in a boolean                                                                                                                                                                                                                                                                                        |
+| **Importer options**     | `reimportDeleted: false` — import, delete through the app, re-run, assert it is **not** back; then assert the override brings it back and names it. `strictIdChecking: true` — two rows one day and one cent apart never match                                                                                                                                                                                                |
+| **`notes` untouched**    | write a note, re-run so the row updates, assert the note survives byte for byte                                                                                                                                                                                                                                                                                                                                               |
+| **Ordinal scope**        | a cycle-dated fixture whose statements run the 15th to the 14th, with two identical same-day amounts arriving from two statements in one calendar month, produces two ids and both import                                                                                                                                                                                                                                     |
+| **Determinism**          | the whole pipeline twice over the fixture tree — `_rows.csv` byte-identical, second apply reports `added: 0`                                                                                                                                                                                                                                                                                                                  |
+| **Manifest conflict**    | a tree whose manifest lives in `import/` refuses to stage there and returns `conflict` naming both paths                                                                                                                                                                                                                                                                                                                      |
+| **Provisioning**         | 27 fixture rows across 5 entities with two accounts sharing a last4 → exactly one `ambiguous`, zero silent creates; re-running yields `link`, never a duplicate set                                                                                                                                                                                                                                                           |
+| **Analytics**            | each route against a fixture budget with a hand-computed expected answer; transfers excluded by default and the exclusion echoed; off-budget excluded by default                                                                                                                                                                                                                                                              |
+| **Undo**                 | every write route, followed by `/undo`, returns the budget to its prior state under a full-table hash                                                                                                                                                                                                                                                                                                                         |
+| **Query guard**          | a mutation verb, a second statement, a denied table, an over-cap result — each refused or clamped as specified, and the denied-table refusal names the typed route                                                                                                                                                                                                                                                            |
+| **Leak canary**          | every route in `/capabilities` called against a fixture; responses grepped for the key pattern, `secret`, `password`, `/Users/`                                                                                                                                                                                                                                                                                               |
+| **Open-source canaries** | the three §17 greps                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Integration**          | a real sync server on an ephemeral port, a temp state dir and a temp credentials file; the full ladder end to end                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -1648,28 +1806,28 @@ Each row is a real sentence an operator says, and the route sequence that answer
 same scenarios mcp.mdx §18 dramatises for a model and cli.mdx §19 dramatises for a terminal — here
 they are the wire.
 
-| # | "…"                                                        | Routes                                                                                     |
-| - | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| 1 | Is this thing even on?                                      | `GET /ping` → `GET /whoami`                                                                |
-| 2 | Set my budget up from my statement archive                  | `GET /ingest/manifest` → `POST /ingest/accounts/plan` → `POST /ingest/accounts/apply` → `POST /ingest/plan` → `POST /ingest/apply` |
-| 3 | Import last month's downloads                               | `POST /ingest/file/plan` → `POST /ingest/file/apply`                                        |
-| 4 | What did I spend on groceries this year, by month?          | `GET /analytics/spending-by-category?interval=month&category_ids=…`                          |
-| 5 | Where is my money actually going?                           | `GET /analytics/spending-by-category?top_n=10` + `GET /analytics/payee-leaderboard`          |
-| 6 | What subscriptions am I paying for?                         | `GET /analytics/recurring`                                                                  |
-| 7 | What have I not categorised?                                | `GET /analytics/uncategorized-summary` → `GET /transactions?uncategorized=true`              |
-| 8 | Categorise all 46 Whole Foods transactions as Groceries     | `POST /rules/preview` → `POST /rules` → `POST /rules/run` (dry run, then token)              |
-| 9 | Northbank says $4,211.08 as of the 31st                         | `POST /accounts/:id/reconcile/plan` → `POST /accounts/:id/reconcile/apply`                   |
-| 10 | Build me next month's budget from the last six months      | `POST /budget/month/:m/set-average` (dry run) → token                                        |
-| 11 | I overspent Dining by $84 — cover it from Fun Money        | `GET /budget/month/:m` → `POST /budget/month/:m/cover-overspending`                          |
-| 12 | Which categories am I spending in with no budget?          | `GET /budget/month/:m/gaps`                                                                 |
-| 13 | How long could I go if income stopped?                     | `GET /analytics/runway`                                                                     |
-| 14 | Anything weird this month?                                 | `GET /analytics/anomalies`                                                                  |
-| 15 | Did my net worth go up this year?                          | `GET /analytics/net-worth?interval=month`                                                   |
-| 16 | Clean up my payee list                                     | `GET /payees/orphaned` → `POST /payees/merge` (dry run) → token                              |
-| 17 | Undo that                                                  | `POST /undo`                                                                                |
-| 18 | Which months of statements am I missing?                   | `GET /ingest/coverage`                                                                      |
-| 19 | Something nobody anticipated                               | `GET /schema` → `POST /query`                                                               |
-| 20 | Back up before I let an agent near this                    | `POST /budgets/:id/backup`                                                                  |
+| #   | "…"                                                     | Routes                                                                                                                             |
+| --- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Is this thing even on?                                  | `GET /ping` → `GET /whoami`                                                                                                        |
+| 2   | Set my budget up from my statement archive              | `GET /ingest/manifest` → `POST /ingest/accounts/plan` → `POST /ingest/accounts/apply` → `POST /ingest/plan` → `POST /ingest/apply` |
+| 3   | Import last month's downloads                           | `POST /ingest/file/plan` → `POST /ingest/file/apply`                                                                               |
+| 4   | What did I spend on groceries this year, by month?      | `GET /analytics/spending-by-category?interval=month&category_ids=…`                                                                |
+| 5   | Where is my money actually going?                       | `GET /analytics/spending-by-category?top_n=10` + `GET /analytics/payee-leaderboard`                                                |
+| 6   | What subscriptions am I paying for?                     | `GET /analytics/recurring`                                                                                                         |
+| 7   | What have I not categorised?                            | `GET /analytics/uncategorized-summary` → `GET /transactions?uncategorized=true`                                                    |
+| 8   | Categorise all 46 Whole Foods transactions as Groceries | `POST /rules/preview` → `POST /rules` → `POST /rules/run` (dry run, then token)                                                    |
+| 9   | Northbank says $4,211.08 as of the 31st                 | `POST /accounts/:id/reconcile/plan` → `POST /accounts/:id/reconcile/apply`                                                         |
+| 10  | Build me next month's budget from the last six months   | `POST /budget/month/:m/set-average` (dry run) → token                                                                              |
+| 11  | I overspent Dining by $84 — cover it from Fun Money     | `GET /budget/month/:m` → `POST /budget/month/:m/cover-overspending`                                                                |
+| 12  | Which categories am I spending in with no budget?       | `GET /budget/month/:m/gaps`                                                                                                        |
+| 13  | How long could I go if income stopped?                  | `GET /analytics/runway`                                                                                                            |
+| 14  | Anything weird this month?                              | `GET /analytics/anomalies`                                                                                                         |
+| 15  | Did my net worth go up this year?                       | `GET /analytics/net-worth?interval=month`                                                                                          |
+| 16  | Clean up my payee list                                  | `GET /payees/orphaned` → `POST /payees/merge` (dry run) → token                                                                    |
+| 17  | Undo that                                               | `POST /undo`                                                                                                                       |
+| 18  | Which months of statements am I missing?                | `GET /ingest/coverage`                                                                                                             |
+| 19  | Something nobody anticipated                            | `GET /schema` → `POST /query`                                                                                                      |
+| 20  | Back up before I let an agent near this                 | `POST /budgets/:id/backup`                                                                                                         |
 
 ---
 
@@ -1698,21 +1856,21 @@ The plane is done when all of these hold:
 
 ## 21. Build phases
 
-| Phase  | Delivers                                                                                          | Depends on |
-| ------ | ------------------------------------------------------------------------------------------------- | ---------- |
-| **P0** | ✅ *done* — mount, key, gates 1–3, envelope, `/ping`, fail-closed, the mount-order test            | —          |
-| **P1** | `engine.ts` (the one `@actual-app/api` instance), `tier.ts`, `schema.ts`, `/whoami`, `/capabilities`, `/health`, `/schema` | P0 |
-| **P2** | The read families: accounts, transactions, categories, budget months, reference data, `/query`    | P1         |
-| **P3** | `confirm.ts` and the write protocol; the first writes — transactions, budget amounts, `/sync`, `/undo` | P2     |
-| **P4** | The ingest plane, `prepared` mode: manifest, scan, coverage, map, plan, apply, file import         | P3         |
-| **P5** | Account provisioning (§12) and the map writer                                                     | P4         |
-| **P6** | The envelope operations (§8.5) — cover, transfer, copy, averages, holds, goal templates           | P3         |
-| **P7** | The analytics plane (§10)                                                                         | P2         |
-| **P8** | Rules, schedules, payees, tags, notes; `/rules/preview`; reconcile                                | P3         |
-| **P9** | `raw` ingest mode (PDF extraction, both de-dupe layers, staging)                                  | P4         |
-| **P10** | Admin tier, batch, NDJSON progress, the audit trail, the full canary suite                       | P3         |
+| Phase   | Delivers                                                                                                                   | Depends on |
+| ------- | -------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **P0**  | ✅ _done_ — mount, key, gates 1–3, envelope, `/ping`, fail-closed, the mount-order test                                    | —          |
+| **P1**  | `engine.ts` (the one `@actual-app/api` instance), `tier.ts`, `schema.ts`, `/whoami`, `/capabilities`, `/health`, `/schema` | P0         |
+| **P2**  | The read families: accounts, transactions, categories, budget months, reference data, `/query`                             | P1         |
+| **P3**  | `confirm.ts` and the write protocol; the first writes — transactions, budget amounts, `/sync`, `/undo`                     | P2         |
+| **P4**  | The ingest plane, `prepared` mode: manifest, scan, coverage, map, plan, apply, file import                                 | P3         |
+| **P5**  | Account provisioning (§12) and the map writer                                                                              | P4         |
+| **P6**  | The envelope operations (§8.5) — cover, transfer, copy, averages, holds, goal templates                                    | P3         |
+| **P7**  | The analytics plane (§10)                                                                                                  | P2         |
+| **P8**  | Rules, schedules, payees, tags, notes; `/rules/preview`; reconcile                                                         | P3         |
+| **P9**  | `raw` ingest mode (PDF extraction, both de-dupe layers, staging)                                                           | P4         |
+| **P10** | Admin tier, batch, NDJSON progress, the audit trail, the full canary suite                                                 | P3         |
 
-P2 and P7 are what make the MCP genuinely useful; P4 and P5 are what make the *first evening* useful.
+P2 and P7 are what make the MCP genuinely useful; P4 and P5 are what make the _first evening_ useful.
 Build in that order and the thing is valuable before it is complete.
 
 ---

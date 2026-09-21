@@ -17,10 +17,10 @@ export const listAccounts: ToolDef = {
   route: { method: 'GET', path: '/accounts' },
   tier: 'read',
   description: describe({
-    what: 'Lists the operator\'s accounts with their current balances in integer cents. Closed accounts are excluded unless include_closed is true.',
+    what: "Lists the operator's accounts with their current balances in integer cents. Closed accounts are excluded unless include_closed is true.",
     tier: 'read',
     insteadOf:
-      'For one account\'s balance as of a past date, use ab_get_account_balance with as_of.',
+      "For one account's balance as of a past date, use ab_get_account_balance with as_of.",
   }),
   inputSchema: {
     type: 'object',
@@ -77,10 +77,10 @@ export const getAccountBalance: ToolDef = {
   route: { method: 'GET', path: '/accounts/:id/balance' },
   tier: 'read',
   description: describe({
-    what: 'Gets one account\'s balance in integer cents, optionally as of a past date. The answer carries the cutoff it was computed against.',
+    what: "Gets one account's balance in integer cents, optionally as of a past date. The answer carries the cutoff it was computed against.",
     tier: 'read',
     insteadOf:
-      'Do not sum transactions to get a balance — this is the app\'s own figure and the two will differ on splits.',
+      "Do not sum transactions to get a balance — this is the app's own figure and the two will differ on splits.",
   }),
   inputSchema: {
     type: 'object',

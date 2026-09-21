@@ -5,3 +5,8 @@
 # prettier read this file.
 ai/**/*.md
 pm/prompts/*.md
+
+# GENERATED — mcp/scripts/build-instructions.mjs writes this from ai/mcp_prompt.md.
+# Formatting it would make the checked-in artifact differ from what the generator
+# produces, and the freshness test (pm/mcp.mdx §3.4) would fail on every run.
+mcp/src/instructions.ts

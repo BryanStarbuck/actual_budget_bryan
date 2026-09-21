@@ -2,11 +2,8 @@
   "name": "actual-budget-mcp",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "The actual_budget MCP server. Ours, never published. See pm/mcp.mdx.",
-  "engines": {
-    "node": ">=22"
-  },
+  "type": "module",
   "scripts": {
     "build": "node scripts/build-instructions.mjs && tsc -p tsconfig.json && node scripts/stamp.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -18,5 +15,8 @@
   },
   "devDependencies": {
     "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

@@ -11,7 +11,7 @@
  * stale, which is exactly what §9.4 exists to prevent.
  */
 import type { Config } from './config.js';
-import { fail, ERROR_CODES } from './envelope.js';
+import { ERROR_CODES, fail } from './envelope.js';
 import type { ErrorCode } from './envelope.js';
 
 export type PlaneResponse = {
@@ -129,7 +129,7 @@ export class MachinePlaneClient {
       // that conflates them gives the wrong instruction first (§13).
       throw fail(
         'unauthorized',
-        'The app rejected this server\'s machine key.',
+        "The app rejected this server's machine key.",
         'the app is holding an older key — ask the operator to restart it: `abx stop && abx up`',
       );
     }

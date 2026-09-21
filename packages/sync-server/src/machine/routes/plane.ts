@@ -18,11 +18,11 @@
  * failure there is, and the two have to be distinguishable (§8.0).
  */
 import type { engineState } from '#machine/engine';
-import { knownBudgets } from '#machine/engine';
+import { knownBudgets, requireEngine } from '#machine/engine';
 import { describeRoutes, route } from '#machine/route';
 import type { AnyRouteDef } from '#machine/route';
 import { TIERS } from '#machine/tier';
-import { takesNothing } from '#machine/validate';
+import { fields, takesNothing } from '#machine/validate';
 
 /** Published in /capabilities so a client can branch on a build, not a 404. */
 export const FEATURES: readonly string[] = ['plane'];
@@ -134,11 +134,29 @@ export const planeRoutes: AnyRouteDef[] = [
     method: 'GET',
     path: '/health',
     tier: 'read',
-    summary: 'Can this plane actually answer a question about a budget?',
+    summary:
+      'Can this plane actually answer a question about a budget? probe=true starts the engine.',
     status: 'live',
     needsEngine: false,
-    validate: takesNothing(),
+    validate: fields<{ probe?: boolean }>({ probe: { type: 'boolean' } }),
     run: async ctx => {
+      // `probe` exists because the engine is lazy, and a diagnostic that can
+      // only report "not started yet" is not much of a diagnostic. Without it
+      // the only way to find out whether the engine WOULD start is to call a
+      // real budget route and read the failure, which is a poor thing to ask
+      // of somebody whose install is already not working.
+      //
+      // It defaults to false so the ordinary health check stays free of the
+      // dependency it is reporting on (§8.0), and a failed probe is reported
+      // rather than thrown — this route answers 200 with bad news.
+      if (ctx.args.probe === true) {
+        try {
+          await requireEngine(ctx.env);
+        } catch {
+          // engineState() below carries the reason and the remediation.
+        }
+      }
+
       const engine = ctx.engine();
       const budgets = await knownBudgets();
 
@@ -181,7 +199,9 @@ function unhealthyHint(
   env: NodeJS.ProcessEnv,
 ): string {
   if (engine.status === 'unavailable') {
-    return 'the budget engine is not installed here — run `just build` in the repo';
+    // The engine distinguishes "absent" from "present but unbuilt"; pass its
+    // own remediation through rather than guessing at a generic one.
+    return engine.hint ?? 'the budget engine is not available here';
   }
   if (engine.status === 'failed') {
     return (
@@ -189,8 +209,11 @@ function unhealthyHint(
       `check that ${engine.dataDir} is writable, then restart the sync server`
     );
   }
-  if (engine.status === 'idle' || engine.status === 'starting') {
-    return 'the engine starts on first use — call a budget route, or GET /machine/v1/health again in a moment';
+  if (engine.status === 'idle') {
+    return 'the engine has not been started yet — GET /machine/v1/health?probe=true to start it and report the result';
+  }
+  if (engine.status === 'starting') {
+    return 'the engine is starting — retry in a moment';
   }
   if (budgetCount === 0) {
     return `no budget files found in ${engine.dataDir} — download or create one first`;

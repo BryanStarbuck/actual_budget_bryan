@@ -97,13 +97,13 @@ export class CapabilityCache {
 
   async refresh(): Promise<Capabilities | null> {
     // Coalesce: tools/list plus a burst of calls must not become N requests.
-    this.#inFlight ??= this.#fetch().finally(() => {
+    this.#inFlight ??= this.#load().finally(() => {
       this.#inFlight = null;
     });
     return this.#inFlight;
   }
 
-  async #fetch(): Promise<Capabilities | null> {
+  async #load(): Promise<Capabilities | null> {
     try {
       const res = await this.#client.request('/capabilities');
       this.#value = parse(res.data);

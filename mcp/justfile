@@ -1,0 +1,40 @@
+# actual_budget MCP server (pm/mcp.mdx). Run `just` to list.
+
+set shell := ["bash", "-uc"]
+
+root := justfile_directory()
+
+default:
+    @just --list
+
+# Install the two runtime deps into mcp/node_modules (never the repo lockfile).
+install:
+    cd "{{root}}" && npm install --no-audit --no-fund
+
+# Generate instructions.ts from ai/mcp_prompt.md, compile, stamp executable.
+build:
+    cd "{{root}}" && npm run build
+
+typecheck:
+    cd "{{root}}" && npm run typecheck
+
+# Catalogue tests, gate tests and canaries (builds first: canaries grep dist/).
+test: build
+    cd "{{root}}" && npx vitest --run
+
+# Speak JSON-RPC to the built server by hand and show what initialize returns.
+probe: build
+    #!/usr/bin/env bash
+    set -uo pipefail
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
+      | node "{{root}}/dist/index.js" serve \
+      | head -c 700
+    echo
+
+# Print the registration command (does not run it — registering is the operator's call).
+register:
+    @echo 'claude mcp add actual_budget -- "$HOME/BGit/Bryan_git/actual_budget_bryan/mcp/dist/index.js" serve'
+    @echo '  The bare -- is load-bearing: without it `serve` is eaten by the wrong parser.'
+
+clean:
+    rm -rf "{{root}}/dist"

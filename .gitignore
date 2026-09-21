@@ -120,3 +120,13 @@ actual.config.js
 # Local symlink to private prompts (never commit)
 /prompts
 /prompts/
+
+# The machine plane's budget engine data directory.
+#
+# The engine defaults its dataDir to <repo>/machine-engine, so the first time a
+# budget is loaded it writes the OPERATOR'S FINANCIAL DATA inside this tree —
+# which is going open source. Ignoring it closes the immediate hole; the better
+# fix is for the engine to default outside the repo (the state root at
+# ~/T/_actual_budget/ is where everything else of ours lives). See pm/cli.mdx
+# §17.3 — "No financial data in the repo."
+/machine-engine/

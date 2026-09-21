@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import express from 'express';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resetEngineForTests, setEngineForTests } from './engine.js';
 import { MACHINE_KEY_HEADER } from './machine-auth.js';
@@ -28,11 +28,33 @@ import {
 
 let tmp: string;
 
-function app(): express.Express {
-  const a = express();
-  a.use('/machine/v1', machineRouter);
-  return a;
+/**
+ * ONE listening server for the whole file, closed on the way out.
+ *
+ * Not `request(express())` per call, which is the obvious way to write this
+ * and is wrong here: supertest starts an ephemeral server for every request
+ * it is handed a bare app, and this file makes a few dozen. Those sockets sit
+ * in TIME_WAIT after the file finishes, and because every test file in this
+ * package shares one on-disk `account.sqlite` and runs with
+ * `fileParallelism: false`, the slow teardown shifts the next file's timing
+ * enough to surface the suite's pre-existing cross-file state dependency —
+ * which shows up as an unrelated auth test getting a 403 where it expected a
+ * 400. Binding once and closing once keeps this file's cost to one socket.
+ *
+ * `machineRouter` is a module singleton, so mounting it once is also closer to
+ * how it is actually used.
+ */
+const testApp = express();
+testApp.use('/machine/v1', machineRouter);
+const server = testApp.listen(0);
+
+function app(): typeof server {
+  return server;
 }
+
+afterAll(() => {
+  server.close();
+});
 
 /** Arm the plane against a throwaway credentials file, never the real one. */
 function arm(extra: NodeJS.ProcessEnv = {}): string {
