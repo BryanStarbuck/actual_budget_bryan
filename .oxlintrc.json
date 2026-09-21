@@ -420,7 +420,15 @@
         "packages/vite-plugin-peggy/**/*",
         "packages/crdt/src/proto/**/*",
         "**/vendor/error-file/**/*",
-        "packages/error-file/src/**/*"
+        "packages/error-file/src/**/*",
+        // Not a runtime of the product (§3.3): CI/GitHub scripts, repo bin/ tooling, dev-server
+        // helpers, the self-building abx shim, and upstream SQL migrations (run once, no deps).
+        ".github/**/*",
+        "bin/**/*",
+        "packages/*/bin/**/*",
+        "cli/abx.mjs",
+        "packages/loot-core/migrations/**/*",
+        "packages/api/migrations/**/*"
       ],
       "rules": {
         "actual/catch-must-report": "off"

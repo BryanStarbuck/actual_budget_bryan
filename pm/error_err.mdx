@@ -1444,7 +1444,11 @@ violating or unwired file. `just check-errors` runs it. `yarn lint` already runs
 - generated parsers and protobuf output (`packages/crdt/src/proto`);
 - `*.d.ts`, `*.config.*` and `*.setup.*` files (tooling, not product code);
 - `vendor/error-file` copies;
-- `packages/error-file/src` itself.
+- `packages/error-file/src` itself;
+- files that are not a product runtime (§3.3): `.github/`, the repo and per-package `bin/`
+  tooling, `cli/abx.mjs` (the self-building shim that runs before any library exists), and the
+  upstream SQL migrations under `packages/loot-core/migrations` and `packages/api/migrations`,
+  which run once and carry no dependencies on purpose.
 
 ---
 

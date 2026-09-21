@@ -485,7 +485,9 @@ class AccountInternal extends PureComponent<
         'applying the transaction filters',
         this.applyFilters(filterConditions),
       );
-    } else this.updateQuery(query);
+    } else {
+      this.updateQuery(query);
+    }
 
     if (this.props.accountId) {
       this.props.dispatch(markAccountRead({ id: this.props.accountId }));

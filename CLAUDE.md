@@ -29,24 +29,23 @@ This is the prompt file our MCP server should use to know about our APIs and how
 mcp_prompt.md
 ~/BGit/Bryan_git/actual_budget_bryan/ai
 
-
-
 ## Private Data Boundary: Never Leak Into the Open Source Repo
 
 These two directory hierarchies, and everything under them recursively, hold Bryan's very private personal and financial data:
-* ~/BGit/Bryan_git/Bryan_Arindom/bank_statements/
-* ~/BGit/Bryan_git/Bryan_Arindom/bank_statements/import/
+
+- ~/BGit/Bryan_git/Bryan_Arindom/bank_statements/
+- ~/BGit/Bryan_git/Bryan_Arindom/bank_statements/import/
 
 The directory below is an open source project that we own and publish:
-* ~/BGit/Bryan_git/actual_budget_bryan/
+
+- ~/BGit/Bryan_git/actual_budget_bryan/
 
 HARD REQUIREMENT: Bryan's personal data must never end up anywhere in the ~/BGit/Bryan_git/actual_budget_bryan/ hierarchy. No exceptions.
-* Never copy, move, symlink, or write any file from the private directories above into actual_budget_bryan/.
-* Never put real data in code, tests, fixtures, sample files, docs, logs, commit messages, or comments there. That includes account numbers, balances, transactions, payees, statement text, names, and addresses.
-* When actual_budget_bryan/ needs example data, make up synthetic data. Never derive it from the real statements.
-* Scripts in actual_budget_bryan/ may read private files at runtime through a path the user supplies, but they must write their output outside that repo (for example, into bank_statements/import/), never inside it.
-* Before committing anything in actual_budget_bryan/, check the staged diff for private data. If anything looks real, stop and ask Bryan.
-* Never have Chase statements or Fidelity statements or financial data get into the git repo. But they will get into the database running on localhost that never gets into the git repo. 
-* The data will get in. It is okay for the data to get into the database when we're on localhost, just not into the git repo or the directory hierarchy, because it may accidentally get into the public repo. 
 
-
+- Never copy, move, symlink, or write any file from the private directories above into actual_budget_bryan/.
+- Never put real data in code, tests, fixtures, sample files, docs, logs, commit messages, or comments there. That includes account numbers, balances, transactions, payees, statement text, names, and addresses.
+- When actual_budget_bryan/ needs example data, make up synthetic data. Never derive it from the real statements.
+- Scripts in actual_budget_bryan/ may read private files at runtime through a path the user supplies, but they must write their output outside that repo (for example, into bank_statements/import/), never inside it.
+- Before committing anything in actual_budget_bryan/, check the staged diff for private data. If anything looks real, stop and ask Bryan.
+- Never have Chase statements or Fidelity statements or financial data get into the git repo. But they will get into the database running on localhost that never gets into the git repo.
+- The data will get in. It is okay for the data to get into the database when we're on localhost, just not into the git repo or the directory hierarchy, because it may accidentally get into the public repo.
