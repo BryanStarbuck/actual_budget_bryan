@@ -47,6 +47,8 @@ import type { MachineRequest } from './machine-auth.js';
 import type { AnyRouteDef } from './route.js';
 import { accountRoutes } from './routes/accounts.js';
 import { budgetRoutes } from './routes/budgets.js';
+import { categorizeRoutes } from './routes/categorize.js';
+import { categoryRoutes } from './routes/categories.js';
 import { ingestRoutes } from './routes/ingest.js';
 import { MAX_BODY_BYTES, planeRoutes } from './routes/plane.js';
 import { plannedRoutes } from './routes/planned.js';
@@ -76,7 +78,9 @@ export const ROUTES: readonly AnyRouteDef[] = [
   ...planeRoutes,
   ...budgetRoutes,
   ...accountRoutes,
+  ...categoryRoutes,
   ...transactionRoutes,
+  ...categorizeRoutes,
   ...ingestRoutes,
   ...plannedRoutes,
 ];

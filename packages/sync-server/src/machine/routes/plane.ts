@@ -29,7 +29,7 @@ import { fields, takesNothing } from '#machine/validate';
 const errors = errorFileFor('sync-server/src/machine/routes/plane.ts');
 
 /** Published in /capabilities so a client can branch on a build, not a 404. */
-export const FEATURES: readonly string[] = ['plane', 'budgets', 'accounts', 'transactions', 'ingest.prepared'];
+export const FEATURES: readonly string[] = ['plane', 'budgets', 'accounts', 'categories.tree', 'transactions', 'transactions.categorize_by_import', 'ingest.prepared'];
 
 export const MAX_LIMIT = 5000;
 export const MAX_CHANGES_DEFAULT = 200;

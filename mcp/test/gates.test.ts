@@ -301,3 +301,82 @@ describe('the envelope (§12)', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe('ab_get_category_tree — the server-built YAML (§9.5)', () => {
+  const yaml = 'app: actual_budget\ngroups:\n  - name: Food\n';
+
+  it('sends the envelope first and the YAML verbatim as a second block', async () => {
+    let asked = '';
+    const host = makeHost(
+      readOnly,
+      stubClient({
+        live: ['GET /categories/tree'],
+        onRequest: route => {
+          asked = route;
+          return {
+            ok: true,
+            data: {
+              app: 'actual_budget',
+              counts: { groups: 1, subcategories: 0 },
+              groups: [],
+              yaml,
+            },
+          };
+        },
+      }),
+    );
+    const raw = await host.handleCallTool('ab_get_category_tree', {});
+    expect(asked).toBe('/categories/tree');
+    expect(raw.content).toHaveLength(2);
+    const envelope = parse(raw) as {
+      ok: boolean;
+      data?: Record<string, unknown>;
+    };
+    expect(envelope.ok).toBe(true);
+    // Lifted out, not sent twice.
+    expect(envelope.data).not.toHaveProperty('yaml');
+    expect(envelope.data?.counts).toEqual({ groups: 1, subcategories: 0 });
+    expect(raw.content[1]?.text).toBe(yaml);
+  });
+
+  it('every other tool still answers in exactly one block', async () => {
+    const host = makeHost(readOnly, stubClient({ live: ['GET /payees'] }));
+    const raw = await host.handleCallTool('ab_list_payees', {});
+    expect(raw.content).toHaveLength(1);
+  });
+
+  it('refuses ab_apply_categories_by_import with the write tier off, but plans', async () => {
+    const host = makeHost(
+      readOnly,
+      stubClient({
+        live: [
+          'POST /transactions/categorize-by-import/plan',
+          'POST /transactions/categorize-by-import/apply',
+        ],
+        onRequest: () => ({
+          ok: true,
+          data: { dry_run: true, counts: { changed: 1 } },
+        }),
+      }),
+    );
+    const planned = parse(
+      await host.handleCallTool('ab_plan_categories_by_import', {
+        assignments: [
+          {
+            account: 'Northbank Checking',
+            imported_id: 'FIT-0001',
+            category: 'Food > Groceries',
+          },
+        ],
+      }),
+    );
+    expect(planned.ok).toBe(true);
+    const applied = parse(
+      await host.handleCallTool('ab_apply_categories_by_import', {
+        confirm: 'cf_x',
+        dry_run: false,
+      }),
+    );
+    expect(applied.error?.code).toBe('write_disabled');
+  });
+});

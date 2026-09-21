@@ -175,7 +175,7 @@ Three halves, each load-bearing:
 - _Without inventing a number_ — every figure is computed behind the machine plane and returned
   verbatim; the server's own code never sums, filters, rounds or estimates (§9.4, §10). The
   ANALYTICS family exists so that a total is always a tool call and never a model's addition.
-- _Cannot change it by accident_ — 50 of 68 tools are read-only, the 18 that write require the
+- _Cannot change it by accident_ — 52 of 71 tools are read-only, the 19 that write require the
   server's write tier **and** this server's, **and** `dry_run: false`, **and** a `confirm` token
   that only the matching plan produces, under a ceiling that refuses and reports the real count
   (§9.7).
@@ -196,7 +196,7 @@ Three halves, each load-bearing:
 | **Authenticates with** | `X-Actual-Machine-Key`, from `~/.credentials/actual_budget.json` (0600)                             |
 | **Env prefix**         | `ABMCP_`                                                                                            |
 | **Logs**               | `~/T/_actual_budget/mcp.info` and `mcp.err` — beside the CLI's `cli.info`/`cli.err`                 |
-| **Writes?**            | **off by default.** 50 of 68 tools read; the 18 that write need two switches, a dry run and a token |
+| **Writes?**            | **off by default.** 52 of 71 tools read; the 19 that write need two switches, a dry run and a token |
 | **Computes?**          | nothing                                                                                             |
 | **Instructions**       | `ai/mcp_prompt.md`, loaded from disk at startup — editable without a rebuild (§8.3)                 |
 
@@ -205,7 +205,7 @@ Three halves, each load-bearing:
 ## 1. What this is, in one paragraph
 
 `actual_budget` is a stdio MCP server that exposes this install's budget to Claude Code as
-sixty-eight typed tools. It holds no budget logic, no database connection, and no copy of the
+seventy-one typed tools. It holds no budget logic, no database connection, and no copy of the
 ledger: each tool validates its arguments, makes one authenticated call to the machine-plane API
 described by [apis.mdx](./apis.mdx), and returns the app's own answer inside a fixed envelope. It
 shares its credential, its routes and its engine with the CLI, so an answer an agent reads and an
@@ -308,7 +308,7 @@ Defence in depth, because any one layer can be defeated by a model having a bad 
 | --- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | 1   | Distinct server key `actual_budget`                                                             | Registration-level collision                                              |
 | 2   | `serverInfo.name` agreeing with the key                                                         | A human debugging a transcript seeing two names for one server            |
-| 3   | `ab_` prefix on all 68 tools                                                                    | The model losing the server segment (§3.2)                                |
+| 3   | `ab_` prefix on all 71 tools                                                                    | The model losing the server segment (§3.2)                                |
 | 4   | A fourth mandatory description clause naming the server (§9.2)                                  | A model reading a description and still not knowing whose tool it is      |
 | 5   | An `instructions` block with routing FIRST                                                      | The model choosing before it has read any tool description                |
 | 6   | Refuse-with-redirect on a foreign-shaped argument                                               | The model that has already chosen wrong — taught at the moment it crosses |
@@ -788,7 +788,7 @@ Code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/scripts/build-instructions.ts` �
 
 ## 9. The tool catalogue
 
-**Sixty-eight tools in ten families. Fifty are read-only.**
+**Seventy-one tools in ten families. Fifty-two are read-only.**
 
 Every one of them is one route in [apis.mdx](./apis.mdx) §8 or §10. The mapping is one-to-one and a
 test asserts it in both directions: a tool with no route is a tool that cannot work, and a route
@@ -898,17 +898,31 @@ Ten families. Read tools first, because they are what the model spends its day i
 | `ab_list_uncategorized`  | every transaction with no category, across accounts — the commonest real question                                                                                                                            |
 | `ab_export_transactions` | the same filters, rendered as CSV, for a spreadsheet                                                                                                                                                         |
 
-**Categories and the budget (7, read)**
+**Categories and the budget (8, read)**
 
 | Tool                        | Answers                                                                                              |
 | --------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `ab_list_categories`        | with `include_hidden`, `group_id`                                                                    |
 | `ab_list_category_groups`   | the group tree                                                                                       |
+| `ab_get_category_tree`      | every group with its categories nested, in display order — as YAML **and** as the structured tree    |
 | `ab_list_budget_months`     | which months exist, and the data bounds                                                              |
 | `ab_get_budget_month`       | one month: `budgeted`, `spent`, `balance`, `carryover` per category, plus `to_budget` and the totals |
 | `ab_get_category_spend`     | one category across a range, from the app's own aggregation                                          |
 | `ab_list_budget_gaps`       | categories with spending and **no budget entry** — §10.2's rule, made into a tool                    |
 | `ab_check_budget_templates` | parse every `#template` goal note and report every one that does not parse. Read-only                |
+
+**`ab_get_category_tree` is read before anything is categorised.** It calls `GET /categories/tree`
+(apis.mdx §8.4a), where the server builds both the tree and its YAML — the shape ezBookkeeping and
+Firefly III also emit, so the three sister apps' trees compare line for line. The result is the one
+exception to "one text block" (§12.1): the envelope comes first as always, with `data` holding
+`app`, `generated_at`, `counts` and `groups`, and the YAML document follows as a **second** text
+block, verbatim, so the model reads YAML rather than a JSON-escaped copy of it. The tool lifts
+`data.yaml` into that block instead of sending it twice; it assembles nothing. A category that is not
+in the tree does not exist, and no tool here creates one — the instructions tell the model to stop
+and ask the operator to create a missing category in the app, deliberately, then re-read the tree.
+
+Implemented (the tool, and the second text block) in code:
+`~/BGit/Bryan_git/actual_budget_bryan/mcp/src/tools/budget.ts` — `getCategoryTree.run`; `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/server.ts` — `McpServerHost.#respond`
 
 **Reference data (6, read)**
 
@@ -971,39 +985,54 @@ do not.
 | `ab_plan_statement_import`     | Actual's own dry run: new, already present, fuzzy matches — per account             |
 | `ab_plan_file_import`          | one file into one account — the "Import" button, previewed                          |
 
-**Previews for writes (2, read)**
+**Previews for writes (3, read)**
 
-| Tool                | Answers                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------------------- |
-| `ab_preview_rule`   | which existing transactions a rule would match, **before** it is saved                         |
-| `ab_reconcile_plan` | the engine's cleared balance vs the operator's figure, the difference, and the uncleared count |
+| Tool                           | Answers                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `ab_preview_rule`              | which existing transactions a rule would match, **before** it is saved                                                    |
+| `ab_reconcile_plan`            | the engine's cleared balance vs the operator's figure, the difference, and the uncleared count                            |
+| `ab_plan_categories_by_import` | for `{account, imported_id, category}` rows: which already-imported row each names, and whether its category would change |
 
 These are read-tier on purpose. Authoring a rule and reconciling an account are the two places where
 a program most wants to see the consequence before committing, and neither preview needs the write
 tier to be on — so the operator can do the thinking on a day when writes are off.
 
-**The write tier (18, off by default)**
+**`ab_plan_categories_by_import` → `ab_apply_categories_by_import`** categorises rows the importer
+already wrote, keyed by what the pipeline already has — the account and the OFX FITID it put in the
+file (`imported_id`) — instead of making the model list thousands of rows to learn transaction ids.
+Categories are named as `Group > Category` paths from `ab_get_category_tree`, or by id. The plan
+reports every row as `change`, `unchanged`, `not_found`, `unknown_account`, `ambiguous_account`,
+`unknown_category`, `ambiguous_category`, `ambiguous_row`, `split_parent`, `transfer` or
+`duplicate_assignment`, with counts and `within_max_changes`. **An unknown category is reported,
+never created.** The apply takes only the plan's token, recomputes, refuses if any row moved, touches
+only `category`, and returns each changed row with the category it replaced (apis.mdx §8.3a).
 
-| Tool                          | Changes                                                                            |
-| ----------------------------- | ---------------------------------------------------------------------------------- |
-| `ab_apply_accounts`           | creates the accounts a manifest needs, and writes the map (§11.5)                  |
-| `ab_apply_statement_import`   | runs a plan through Actual's importer (§11.5)                                      |
-| `ab_apply_file_import`        | imports one file into one account                                                  |
-| `ab_add_transactions`         | adds transactions to one account                                                   |
-| `ab_update_transaction`       | one transaction's fields, including its splits                                     |
-| `ab_categorize_transactions`  | sets a category on a named set or a filter, under a ceiling                        |
-| `ab_set_budget_amount`        | one category's budgeted amount, or its carryover, for one month                    |
-| `ab_cover_overspending`       | moves money from one category to a category that went negative                     |
-| `ab_transfer_category_budget` | moves budgeted money between two categories, or out of To Budget                   |
-| `ab_copy_previous_budget`     | last month's budget into this one                                                  |
-| `ab_set_budget_to_average`    | an N-month average into this month, for all or named categories                    |
-| `ab_apply_goal_templates`     | applies the `#template` notes for a month                                          |
-| `ab_add_rule`                 | creates a rule (after `ab_preview_rule`, which its description names)              |
-| `ab_run_rules`                | runs the rules engine over a named set or a filter, under a ceiling                |
-| `ab_merge_payees`             | collapses duplicate payees into one                                                |
-| `ab_reconcile_apply`          | marks the cleared set reconciled and, if asked, creates **one** visible adjustment |
-| `ab_sync`                     | syncs with the sync server                                                         |
-| `ab_undo`                     | reverses the last change — **the most important write tool here**                  |
+Implemented in code: `~/BGit/Bryan_git/actual_budget_bryan/mcp/src/tools/categorize.ts` —
+`planCategoriesByImport`, `applyCategoriesByImport`
+
+**The write tier (19, off by default)**
+
+| Tool                            | Changes                                                                            |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `ab_apply_accounts`             | creates the accounts a manifest needs, and writes the map (§11.5)                  |
+| `ab_apply_statement_import`     | runs a plan through Actual's importer (§11.5)                                      |
+| `ab_apply_file_import`          | imports one file into one account                                                  |
+| `ab_add_transactions`           | adds transactions to one account                                                   |
+| `ab_update_transaction`         | one transaction's fields, including its splits                                     |
+| `ab_categorize_transactions`    | sets a category on a named set or a filter, under a ceiling                        |
+| `ab_apply_categories_by_import` | sets the category on already-imported rows a plan token names — and nothing else   |
+| `ab_set_budget_amount`          | one category's budgeted amount, or its carryover, for one month                    |
+| `ab_cover_overspending`         | moves money from one category to a category that went negative                     |
+| `ab_transfer_category_budget`   | moves budgeted money between two categories, or out of To Budget                   |
+| `ab_copy_previous_budget`       | last month's budget into this one                                                  |
+| `ab_set_budget_to_average`      | an N-month average into this month, for all or named categories                    |
+| `ab_apply_goal_templates`       | applies the `#template` notes for a month                                          |
+| `ab_add_rule`                   | creates a rule (after `ab_preview_rule`, which its description names)              |
+| `ab_run_rules`                  | runs the rules engine over a named set or a filter, under a ceiling                |
+| `ab_merge_payees`               | collapses duplicate payees into one                                                |
+| `ab_reconcile_apply`            | marks the cleared set reconciled and, if asked, creates **one** visible adjustment |
+| `ab_sync`                       | syncs with the sync server                                                         |
+| `ab_undo`                       | reverses the last change — **the most important write tool here**                  |
 
 **`ab_undo` is not an afterthought.** An agent that can write must be an agent that can be
 un-written, and the tool exists so the answer to "that wasn't what I meant" is one call rather than
@@ -1023,7 +1052,7 @@ a support conversation. It is built in the same phase as the first write, never 
 
 ### 9.5a The catalogue is large, and that has a cost
 
-Sixty-eight tool definitions is real context. Three things keep it affordable, and they are
+Seventy-one tool definitions is real context. Three things keep it affordable, and they are
 requirements rather than hopes:
 
 1. **Descriptions are one sentence plus the four clauses of §9.2**, and nothing else. No argument
@@ -1297,6 +1326,10 @@ Every result is **one text content block holding pretty-printed JSON**. One shap
 `meta.budgetId` and `budgetName` are on **every** response, because they are the cheapest possible
 defence against T3: a model that has drifted onto the wrong ledger is holding evidence of it in
 every reply.
+
+**The one exception is additive.** `ab_get_category_tree` returns that same envelope as the first
+block and the server-built YAML document as a second text block (§9.5). `content[0]` is the envelope
+on every tool, so a caller that parses only the first block never breaks.
 
 ### 12.2 Failure
 
@@ -1606,7 +1639,7 @@ Recorded here because each one is a plausible-looking sequence that must never a
    sentence is §3.4 layer 5 verbatim.
 5. `grep -rE "console\.log\(|process\.stdout\.write\(" mcp/dist/` returns nothing.
 6. The built bundle contains no host literal other than loopback, and no `child_process` import.
-7. Every one of the 68 tools carries all four description clauses; every name matches `^ab_[a-z_]+$`;
+7. Every one of the 71 tools carries all four description clauses; every name matches `^ab_[a-z_]+$`;
    `tools/list` and dispatch agree in both directions.
    7a. **Every tool maps to exactly one route in [apis.mdx](./apis.mdx)**, and every route that spec's
    §9 coverage matrix marks ✅ either has a tool or appears in §9.5's omissions table with a reason.

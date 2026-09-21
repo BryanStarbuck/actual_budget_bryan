@@ -70,6 +70,10 @@ Bracket key:
 [     ]  P9   raw ingest mode: PDF extraction, both de-dupe layers, staging
 [     ]  P10  admin tier, batch, NDJSON progress, audit trail, the full canary suite
 
+CLI     : read verbs added 2026-09-21 — abx budgets, abx accounts list, abx accounts balance
+          <id> [--as-of], abx transactions list --account <id>, abx statements manifest.
+          Money renders via centsToDecimal; json stays integer cents.
+
 NEXT: finish P2 (categories, months, /query) so the remaining 28 read tools answer
 
 KNOWN PRE-EXISTING FLAKE IN THE SYNC-SERVER SUITE (not ours — measured)

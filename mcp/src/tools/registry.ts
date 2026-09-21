@@ -8,6 +8,7 @@
  */
 import { ACCOUNT_TOOLS, TRANSACTION_TOOLS } from './accounts.js';
 import { BUDGET_TOOLS } from './budget.js';
+import { CATEGORIZE_TOOLS } from './categorize.js';
 import { ORIENTATION_TOOLS } from './orientation.js';
 import { QUERY_TOOLS, REFERENCE_TOOLS } from './reference.js';
 import { STATEMENT_TOOLS } from './statements.js';
@@ -18,10 +19,11 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   ...ORIENTATION_TOOLS, // 3 read
   ...ACCOUNT_TOOLS, // 3 read
   ...TRANSACTION_TOOLS, // 3 read
-  ...BUDGET_TOOLS, // 6 read
+  ...BUDGET_TOOLS, // 7 read
   ...REFERENCE_TOOLS, // 4 read
   ...QUERY_TOOLS, // 2 read
   ...STATEMENT_TOOLS, // 10 read + 3 write (ab_apply_accounts, ab_apply_file_import, ab_apply_statement_import)
+  ...CATEGORIZE_TOOLS, // 1 read + 1 write (ab_plan_ / ab_apply_categories_by_import)
   ...WRITE_TOOLS, // 4 write
 ]);
 

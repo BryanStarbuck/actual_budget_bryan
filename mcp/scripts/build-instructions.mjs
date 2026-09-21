@@ -40,9 +40,9 @@ const OUT_FILE = path.join(mcpRoot, 'src', 'instructions.ts');
 const TOKENS = {
   SERVER_KEY: 'actual_budget',
   TOOL_PREFIX: 'ab_',
-  TOTAL_TOOLS: '38',
-  READ_TOOLS: '31',
-  WRITE_TOOLS: '7',
+  TOTAL_TOOLS: '41',
+  READ_TOOLS: '33',
+  WRITE_TOOLS: '8',
   API_URL: 'http://127.0.0.1:5006',
   CREDENTIALS_FILE: '~/.credentials/actual_budget.json',
   CLI_BINARY: 'abx',

@@ -71,6 +71,16 @@ Import the `_ALL_actual.ofx` file, never the per-month files beside it: the comb
 
 A first import of a whole account reports every row as "to add" and nothing "already there". A second import of the same file reports nothing to add and everything already there. Anything else on a re-import — rows to add, rows to update — is worth showing the operator before applying.
 
+CATEGORISING — READ THE TREE FIRST, EVERY TIME
+
+Before you categorise anything — one row or three thousand — call `{TOOL_PREFIX}get_category_tree`. It returns every category group with its categories nested, in the order the operator sees them, as a YAML document (a second text block after the JSON) plus the structured tree with every id. The same YAML shape comes out of ezBookkeeping and Firefly III, so the three are comparable by eye.
+
+Pick categories ONLY from that tree. Write them as the tree writes them, `Group > Category` — `Food > Groceries` — or pass the id. A bare category name works only when no other group has one of the same name; when two do, the server says `ambiguous_category` and lists both, and you pick with the operator, not for them. A category that is not in the tree does not exist, however obvious it seems.
+
+When the right category is missing, do not file the row under the nearest one and do not invent a new name. Stop, tell the operator which category you need and why, and let them create it in the app — deliberately, in the group they choose. No tool here creates a category. Then read the tree again and continue.
+
+Rows already imported from a statement carry an `imported_id` (the OFX FITID). To categorise them in bulk, use `{TOOL_PREFIX}plan_categories_by_import` with a list of account, imported_id and category, then `{TOOL_PREFIX}apply_categories_by_import` with its token. The plan changes nothing and reports every row: `change`, `unchanged`, `not_found`, `unknown_category`, `ambiguous_category`, `ambiguous_row`, `split_parent`, `transfer`. Show the operator the counts and every row that is not `change` or `unchanged` before applying. Only the category is ever touched, and each changed row comes back with the category it replaced. For a single row you already have the transaction id of, `{TOOL_PREFIX}update_transaction` is simpler.
+
 WHAT YOU CANNOT UNDO
 
 There is no tool that deletes a transaction, an account, a category, a rule or a schedule. Deleting somebody's financial records is a human act in an interface that can show them what is about to go.
@@ -87,7 +97,7 @@ These two are different problems with different fixes, which is why they are dif
 
 WHAT COMES BACK, AND HOW TO READ IT
 
-Every result is one JSON object. On success `ok` is true and the answer is in `data`, with `meta` carrying `budgetId`, `budgetName`, `target` and `asOf`. On failure `ok` is false and `error` carries a `code` from a fixed list and a `hint` naming the remedy.
+Every result is one JSON object, in the first text block. (`{TOOL_PREFIX}get_category_tree` adds its YAML document as a second block.) On success `ok` is true and the answer is in `data`, with `meta` carrying `budgetId`, `budgetName`, `target` and `asOf`. On failure `ok` is false and `error` carries a `code` from a fixed list and a `hint` naming the remedy.
 
 `meta.budgetName` is on every reply for a reason: if it is not the budget the operator is asking about, stop and say so rather than answering from the wrong ledger.
 

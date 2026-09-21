@@ -7,6 +7,9 @@
  * answers "yes, zero" to "did I budget for groceries?" — confident, fluent,
  * and wrong about the operator's own intent, with nothing in the transcript
  * to reveal it.
+ *
+ * ab_get_category_tree is the one tool here whose answer is also a document:
+ * the server's YAML rendering of the tree, sent verbatim beside the envelope.
  */
 import { z } from 'zod';
 
@@ -45,6 +48,45 @@ export const listCategoryGroups: ToolDef = {
   async run(_args, ctx) {
     const res = await ctx.client.request('/category-groups');
     return { data: res.data, untrusted: ['name'] };
+  },
+};
+
+export const getCategoryTree: ToolDef = {
+  name: 'ab_get_category_tree',
+  route: { method: 'GET', path: '/categories/tree' },
+  tier: 'read',
+  description: describe({
+    what: 'Gets every category group with its categories nested, in the order the budget shows them, as a YAML document (the same shape ezBookkeeping and Firefly III use) plus the structured tree with every id.',
+    tier: 'read',
+    insteadOf:
+      'Read this BEFORE categorising anything, and pick categories only from it. A category that is not in the tree does not exist; no tool here creates one.',
+  }),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      include_hidden: {
+        type: 'boolean',
+        description:
+          'Include hidden groups and categories. Defaults to false — hidden ones are retired and should not receive new rows.',
+      },
+    },
+    additionalProperties: false,
+  },
+  schema: z.object({ include_hidden: z.boolean().optional() }).strip(),
+  async run(args, ctx) {
+    const { include_hidden } = args as { include_hidden?: boolean };
+    const res = await ctx.client.request('/categories/tree', {
+      query: { include_hidden: include_hidden ?? false },
+    });
+    // The server built both the tree and its YAML. The YAML travels as its
+    // own text block so the model reads it verbatim; it is lifted out of
+    // `data` rather than sent twice. Nothing else is touched.
+    const { yaml, ...tree } = (res.data ?? {}) as { yaml?: string };
+    return {
+      data: tree,
+      untrusted: ['name'],
+      ...(typeof yaml === 'string' ? { document: yaml } : {}),
+    };
   },
 };
 
@@ -157,6 +199,7 @@ export const listBudgetGaps: ToolDef = {
 export const BUDGET_TOOLS = [
   listCategories,
   listCategoryGroups,
+  getCategoryTree,
   listBudgetMonths,
   getBudgetMonth,
   getCategorySpend,

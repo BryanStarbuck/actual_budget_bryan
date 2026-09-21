@@ -977,22 +977,24 @@ to be composed.
 
 ### 8.3 Transactions
 
-| Route                      | M      | Tier  | Arguments                                                                                                                                                                                                                                                                |
-| -------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/transactions`            | GET    | R     | `account_id` \| `account_ids[]`, `start`, `end`, `category_id`, `uncategorized`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `is_parent`, `is_child`, `has_schedule`, `transfer_only`, `limit`, `offset`, `order` |
-| `/transactions/:id`        | GET    | R     | — (with its splits)                                                                                                                                                                                                                                                      |
-| `/transactions/earliest`   | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
-| `/transactions/latest`     | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
-| `/transactions/export`     | GET    | R     | same filters, `format=csv`                                                                                                                                                                                                                                               |
-| `/transactions`            | POST   | W     | `account_id`, `transactions[]`, `run_rules` (true), `learn_categories` (false), `dry_run`                                                                                                                                                                                |
-| `/transactions/import`     | POST   | W     | `account_id`, `transactions[]`, **the importer options of §11.7**, `dry_run`                                                                                                                                                                                             |
-| `/transactions/:id`        | PATCH  | W     | any field, plus `subtransactions[]` to split                                                                                                                                                                                                                             |
-| `/transactions/bulk`       | PATCH  | W     | `ids[]` \| `filter{}`, `set{}`, `max_changes`, `dry_run`                                                                                                                                                                                                                 |
-| `/transactions/categorize` | POST   | W     | `ids[]` \| `filter{}`, `category_id`, `max_changes`, `dry_run`                                                                                                                                                                                                           |
-| `/transactions/merge`      | POST   | W     | `keep_id`, `merge_ids[]`                                                                                                                                                                                                                                                 |
-| `/transactions/move`       | POST   | W     | `ids[]`, `to_account_id`                                                                                                                                                                                                                                                 |
-| `/transactions/:id`        | DELETE | **A** | `confirm_token`                                                                                                                                                                                                                                                          |
-| `/transactions/bulk`       | DELETE | **A** | `ids[]`, `confirm_token`                                                                                                                                                                                                                                                 |
+| Route                                      | M      | Tier  | Arguments                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/transactions`                            | GET    | R     | `account_id` \| `account_ids[]`, `start`, `end`, `category_id`, `uncategorized`, `payee_id`, `search`, `notes_contain`, `tag`, `min_amount`, `max_amount`, `cleared`, `reconciled`, `is_parent`, `is_child`, `has_schedule`, `transfer_only`, `limit`, `offset`, `order` |
+| `/transactions/:id`                        | GET    | R     | — (with its splits)                                                                                                                                                                                                                                                      |
+| `/transactions/earliest`                   | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
+| `/transactions/latest`                     | GET    | R     | `account_id`                                                                                                                                                                                                                                                             |
+| `/transactions/export`                     | GET    | R     | same filters, `format=csv`                                                                                                                                                                                                                                               |
+| `/transactions`                            | POST   | W     | `account_id`, `transactions[]`, `run_rules` (true), `learn_categories` (false), `dry_run`                                                                                                                                                                                |
+| `/transactions/import`                     | POST   | W     | `account_id`, `transactions[]`, **the importer options of §11.7**, `dry_run`                                                                                                                                                                                             |
+| `/transactions/:id`                        | PATCH  | W     | any field, plus `subtransactions[]` to split                                                                                                                                                                                                                             |
+| `/transactions/bulk`                       | PATCH  | W     | `ids[]` \| `filter{}`, `set{}`, `max_changes`, `dry_run`                                                                                                                                                                                                                 |
+| `/transactions/categorize`                 | POST   | W     | `ids[]` \| `filter{}`, `category_id`, `max_changes`, `dry_run`                                                                                                                                                                                                           |
+| `/transactions/categorize-by-import/plan`  | POST   | R     | `assignments[]` of `{account, imported_id, category}`, `max_changes` — §8.3a                                                                                                                                                                                             |
+| `/transactions/categorize-by-import/apply` | POST   | W     | `confirm_token`, `dry_run` — §8.3a                                                                                                                                                                                                                                       |
+| `/transactions/merge`                      | POST   | W     | `keep_id`, `merge_ids[]`                                                                                                                                                                                                                                                 |
+| `/transactions/move`                       | POST   | W     | `ids[]`, `to_account_id`                                                                                                                                                                                                                                                 |
+| `/transactions/:id`                        | DELETE | **A** | `confirm_token`                                                                                                                                                                                                                                                          |
+| `/transactions/bulk`                       | DELETE | **A** | `ids[]`, `confirm_token`                                                                                                                                                                                                                                                 |
 
 Notes that matter:
 
@@ -1008,25 +1010,155 @@ Notes that matter:
 - **Splits go through `subtransactions[]` on the parent**, never as separate rows with a parent id;
   the engine owns that invariant.
 
+### 8.3a Categorise already-imported rows by import id
+
+The import pipeline writes rows carrying an `imported_id` (the OFX FITID) and usually no category.
+Categorising them afterwards by transaction id would mean listing thousands of rows to learn ids the
+caller already has a better key for: **the account plus the FITID it wrote into the file.** These two
+routes take that key and change exactly one field — `category` — on rows that already exist. They are
+shaped like reconcile (§8.2) and account provisioning (§12): a read-tier `plan` and a write-tier
+`apply`, so the operator can see every row's outcome with the write switches off.
+
+`POST /transactions/categorize-by-import/plan` (read) takes:
+
+```jsonc
+{
+  "assignments": [
+    {
+      "account": "Northbank Checking ••4021",
+      "imported_id": "FIT-0001",
+      "category": "Food > Groceries",
+    },
+    {
+      "account": "acct-id-…",
+      "imported_id": "FIT-0002",
+      "category": "cat-id-…",
+    },
+  ],
+  "max_changes": 200, // optional; the server ceiling by default
+}
+```
+
+- `account` is an account id or its exact name (case- and whitespace-insensitive). Two accounts with
+  the name → `ambiguous_account` with both.
+- `category` is a `Group > Category` path as `GET /categories/tree` writes it, a category id, or a
+  bare category name **only** when no other group has one of that name. Every `>` is tried as the
+  separator, so a group name that itself contains `>` still resolves; two readings that both match
+  are `ambiguous_category`. Hidden categories resolve.
+- Each assignment is matched against the account's rows by exact `imported_id`, top-level rows only.
+
+It answers with `counts` — `rows`, `matched`, `changed`, `unchanged`, `not_found`, `unknown_account`,
+`ambiguous_account`, `unknown_category`, `ambiguous_category`, `ambiguous_row`, `split_parent`,
+`transfer`, `duplicate_assignment` — plus `within_max_changes`, a `rows[]` entry per assignment
+(`status`, the matched `transaction_id`, `date`, `amount`, `from` and `to` as `{id, path, hidden}`,
+a `reason` and `candidates` where they help), and a `confirm_token`.
+
+`POST /transactions/categorize-by-import/apply` (write) takes `confirm_token` and `dry_run` (default
+**true**), recomputes the plan from the token's payload, refuses with `conflict` if any `change` row
+moved (someone categorised it in the browser meanwhile), refuses over `max_changes` with the real
+count, then calls `api/transaction-update` with `{ category }` — and nothing else — for each `change`
+row, and syncs. Each changed row comes back with the category it replaced, so until `POST /undo`
+exists (§7.5) any row can be put back by hand.
+
+What these routes never do, each on purpose:
+
+- **Never create a category.** An unknown path is `unknown_category` and nothing is written for that
+  row (§7.6 — never invent a value). Creating a category is a deliberate act at `POST /categories`.
+- **Never add, delete or re-date a row**, and never touch a field other than `category`. A row that
+  is not found is reported; importing it is `/ingest/file/*`'s job.
+- **Never guess between two matches.** Two rows with one `imported_id` in one account is
+  `ambiguous_row`, with both ids.
+- **Never categorise a split parent** (the category lives on its children) **or a transfer** (the
+  app decides whether a transfer carries a category from the accounts it joins). Both are reported.
+- A second assignment naming the same account and `imported_id` is `duplicate_assignment`; only the
+  first is used.
+
+Matching, resolution, the plan and the apply are implemented in code:
+`~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/routes/categorize.ts` — `plan`, `resolveCategory`, `categorizeRoutes`
+
 ### 8.4 Categories and groups
 
-| Route                       | M      | Tier  | Arguments                                         |
-| --------------------------- | ------ | ----- | ------------------------------------------------- |
-| `/categories`               | GET    | R     | `include_hidden` (false), `group_id`              |
-| `/categories/:id`           | GET    | R     | —                                                 |
-| `/categories`               | POST   | W     | `name`, `group_id`, `is_income` (false), `hidden` |
-| `/categories/:id`           | PATCH  | W     | `name`, `group_id`, `hidden`                      |
-| `/categories/:id/move`      | POST   | W     | `to_index`, `group_id`                            |
-| `/categories/:id`           | DELETE | **A** | `transfer_category_id`, `confirm_token`           |
-| `/categories/sort`          | POST   | W     | `ids[]`                                           |
-| `/category-groups`          | GET    | R     | `include_hidden`                                  |
-| `/category-groups`          | POST   | W     | `name`, `is_income`                               |
-| `/category-groups/:id`      | PATCH  | W     | `name`, `hidden`                                  |
-| `/category-groups/:id/move` | POST   | W     | `to_index`                                        |
-| `/category-groups/:id`      | DELETE | **A** | `transfer_category_id`, `confirm_token`           |
+| Route                       | M      | Tier  | Arguments                                               |
+| --------------------------- | ------ | ----- | ------------------------------------------------------- |
+| `/categories`               | GET    | R     | `include_hidden` (false), `group_id`                    |
+| `/categories/tree`          | GET    | R     | `include_hidden` (false), `format` (json\|yaml) — §8.4a |
+| `/categories/:id`           | GET    | R     | —                                                       |
+| `/categories`               | POST   | W     | `name`, `group_id`, `is_income` (false), `hidden`       |
+| `/categories/:id`           | PATCH  | W     | `name`, `group_id`, `hidden`                            |
+| `/categories/:id/move`      | POST   | W     | `to_index`, `group_id`                                  |
+| `/categories/:id`           | DELETE | **A** | `transfer_category_id`, `confirm_token`                 |
+| `/categories/sort`          | POST   | W     | `ids[]`                                                 |
+| `/category-groups`          | GET    | R     | `include_hidden`                                        |
+| `/category-groups`          | POST   | W     | `name`, `is_income`                                     |
+| `/category-groups/:id`      | PATCH  | W     | `name`, `hidden`                                        |
+| `/category-groups/:id/move` | POST   | W     | `to_index`                                              |
+| `/category-groups/:id`      | DELETE | **A** | `transfer_category_id`, `confirm_token`                 |
 
 `DELETE /categories/:id` refuses without `transfer_category_id` when the category has transactions —
 `must-category-transfer` is the engine's own check, and the refusal names the count.
+
+### 8.4a `GET /categories/tree` — the category tree, as data and as YAML
+
+Every category **group** with its **categories** nested, in the app's own display order (groups by
+`is_income, sort_order`, so income comes last; categories by `sort_order`) — read from
+`api/category-groups-get`, never re-sorted here. `include_hidden` (default **false**) drops hidden
+groups and hidden categories inside visible groups, using the engine's own `hidden` filter.
+
+The server computes **both** representations; the CLI and the MCP never assemble a tree themselves.
+`data` is:
+
+```jsonc
+{
+  "app": "actual_budget",
+  "generated_at": "2026-09-21T22:00:00Z",
+  "counts": { "groups": 2, "subcategories": 3 },
+  "groups": [
+    {
+      "name": "Food",
+      "id": "…",
+      "type": "expense", // "expense" | "income", from the group's is_income
+      "hidden": false,
+      "subcategories": [{ "name": "Groceries", "id": "…", "hidden": false }],
+    },
+  ],
+  "yaml": "app: actual_budget\n…", // the same tree as a YAML document
+}
+```
+
+**The YAML shape is shared with the two sister apps** (ezBookkeeping and Firefly III), key order
+included, so the three trees compare line for line:
+
+```yaml
+app: actual_budget
+generated_at: 2026-09-21T22:00:00Z
+counts:
+  groups: 2
+  subcategories: 3
+groups:
+  - name: Food
+    type: expense
+    id: '…'
+    hidden: false
+    subcategories:
+      - name: Groceries
+        id: '…'
+        hidden: false
+```
+
+Ids are always double-quoted. A name is written plain only when every YAML parser would read it back
+as the same string — it starts with a letter or underscore, holds only letters, digits, spaces and
+`_ . / ( ) + , ' -`, has no leading or trailing space, and is not a word YAML 1.1 reads as a boolean
+or null (`Yes`, `off`, `null`, …). Anything else — `Travel: Air`, `Fees #2`, `Food & Drink`,
+`*Starred`, `2026` — is double-quoted with JSON escaping. An empty group is `subcategories: []`.
+
+**`format=yaml` keeps the envelope**, because everything on this plane answers in it (§5.1): `data`
+then carries only `app`, `counts` and `yaml`, for `curl … '/categories/tree?format=yaml' | jq -r
+.data.yaml`. `abx categories tree` prints the document directly (cli.mdx §8).
+
+The route and the tree are implemented in code:
+`~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/routes/categories.ts` — `buildTree`, `treeYaml`, `categoryRoutes`
+The quoting rule is implemented in code:
+`~/BGit/Bryan_git/actual_budget_bryan/packages/sync-server/src/machine/yaml.ts` — `quoteIfNeeded`, `toYaml`
 
 ### 8.5 The budget — the envelope operations
 

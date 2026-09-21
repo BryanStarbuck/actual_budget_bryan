@@ -1,9 +1,9 @@
 /**
  * The write tier — pm/mcp.mdx §9.5, §9.7.
  *
- * Four tools here plus ab_apply_statement_import in statements.ts: five in
- * total, and every one of them changes money that syncs to the operator's
- * phone.
+ * Four tools here, the three apply_ tools in statements.ts and
+ * ab_apply_categories_by_import in categorize.ts: eight in total, and every
+ * one of them changes money that syncs to the operator's phone.
  *
  * What is deliberately ABSENT is as much of the design as what is present.
  * There is no ab_delete_transaction, no ab_delete_account, no

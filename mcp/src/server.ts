@@ -211,7 +211,7 @@ export class McpServerHost {
         },
       };
 
-      return this.#respond(envelope, false);
+      return this.#respond(envelope, false, result.document);
     } catch (err) {
       const toolError =
         err instanceof ToolError
@@ -291,13 +291,24 @@ export class McpServerHost {
     }
   }
 
-  /** One text content block holding pretty-printed JSON (§12.1). */
+  /**
+   * One text content block holding pretty-printed JSON (§12.1) — plus, for
+   * the one tool that returns a server-built document, that document verbatim
+   * as a second block, so a model reads the YAML rather than a JSON-escaped
+   * copy of it.
+   */
   #respond(
     envelope: Envelope,
     isError: boolean,
+    document?: string,
   ): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
     return {
-      content: [{ type: 'text', text: JSON.stringify(envelope, null, 2) }],
+      content: [
+        { type: 'text', text: JSON.stringify(envelope, null, 2) },
+        ...(document === undefined
+          ? []
+          : [{ type: 'text' as const, text: document }]),
+      ],
       ...(isError ? { isError: true } : {}),
     };
   }

@@ -11,7 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { getBoolean, getString, parseArgs, UNIVERSAL_FLAGS } from './args.js';
 import { ensureServerUp } from './bringup.js';
 import { resolveTarget } from './client.js';
+import * as categories from './commands/categories.js';
 import * as orientation from './commands/orientation.js';
+import * as reads from './commands/reads.js';
 import {
   CredentialsError,
   credentialsPath,
@@ -43,6 +45,12 @@ const VERBS: Verb[] = [
   orientation.whoami,
   orientation.capabilities,
   orientation.health,
+  reads.budgets,
+  reads.accountsList,
+  reads.accountsBalance,
+  reads.transactionsList,
+  reads.statementsManifest,
+  categories.categoriesTree,
 ];
 
 function repoRoot(): string {

@@ -634,6 +634,18 @@ statement's** closing value, so a missing month cannot leave a gap in the balanc
 when a row covers such a gap. A quarterly or annual statement never shadows a monthly one for the
 same month.
 
+**Missing statements (cash mode).** When a statement's printed opening balance is not the previous
+statement's printed closing balance, the months between are not on file. The pipeline writes one
+row, "Net change during missing statements", equal to the difference of those two printed figures,
+dated the first day of the later statement. It is the same idea as Actual's own reconciliation
+adjustment: no transaction is invented, the memo names the gap, and its id
+(`{last4}-gap-{YYYYMMDD}-{cents}`) is stable. When the missing statements are found and imported,
+that row is deleted by hand.
+
+**Verification.** A run is checked by reading the app back through the CLI — `abx accounts list`
+for each balance and `abx transactions list --account <id>` for each row count — and comparing
+against the last printed statement balance and the row count of the imported file.
+
 Fidelity statements are consolidated: one PDF lists several accounts in its "Accounts Included in
 This Report" table. The pipeline reads that table (row-major in the `pdftotext -layout` text) and
 gets one account per account number, whatever folder the PDF was filed in. Done in `accounts_in()`

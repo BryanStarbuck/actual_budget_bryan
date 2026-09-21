@@ -655,6 +655,7 @@ Read routes are always available. Write routes require the write tier
 | `/machine/v1/accounts/:id/balance`                       | GET               | read      | one balance, as of an optional cutoff                                                  |
 | `/machine/v1/transactions`                               | GET               | read      | transactions for an account and date range                                             |
 | `/machine/v1/categories` · `/category-groups`            | GET               | read      | the category tree                                                                      |
+| `/machine/v1/categories/tree`                            | GET               | read      | every group with its categories nested, as data and as YAML (apis.mdx §8.4a)           |
 | `/machine/v1/payees` · `/tags` · `/rules` · `/schedules` | GET               | read      | the reference data                                                                     |
 | `/machine/v1/budget/months` · `/budget/month/:month`     | GET               | read      | budget months                                                                          |
 | `/machine/v1/query`                                      | POST              | read      | one ActualQL query, read-only-guarded                                                  |
@@ -728,6 +729,7 @@ READING THE BUDGET
   abx accounts balance <id> [--as-of YYYY-MM-DD]
   abx transactions list --account <id> [--start D] [--end D] [--uncategorized]
   abx categories list | abx category-groups list
+  abx categories tree [--include-hidden]   the category tree as YAML
   abx payees list | abx tags list | abx rules list | abx schedules list
   abx budget months
   abx budget month <YYYY-MM>
@@ -895,6 +897,14 @@ shell is a better place than a browser to pipe an answer into something else.
   in `--help` because it is the single most common wrong number anyone gets out of a budget tool.
 - **`abx categories list`**, **`category-groups list`**, **`payees list`**, **`tags list`**,
   **`rules list`**, **`schedules list`** — reference data, one route each.
+- **`abx categories tree [--include-hidden]`** — every category group with its categories nested,
+  in display order, from `GET /categories/tree` (apis.mdx §8.4a). **With no `--format`, stdout is
+  the server's YAML document verbatim** — the same shape ezBookkeeping and Firefly III emit — so
+  `abx categories tree > tree.yaml` is the whole document and nothing else. The CLI does not build,
+  sort or re-quote it. An explicit `--format json` prints the envelope (the structured tree plus
+  `data.yaml`); `--format table|csv` prints one row per category: group, category, type, hidden, id.
+  Hidden groups and categories are left out unless `--include-hidden`.
+  Implemented in code: `~/BGit/Bryan_git/actual_budget_bryan/cli/code/src/commands/categories.ts` — `categoriesTree.run`
 - **`abx budget months`** and **`abx budget month <YYYY-MM>`** — the budget. §10 of
   [mcp.mdx](./mcp.mdx) states the rule that governs the output here too, and it is worth repeating:
   **a category with no budget entry is not a category budgeted zero**, and the renderer must print
@@ -916,14 +926,14 @@ is `~/BGit/Bryan_git/Bryan_Arindom/bank_statements/`, and the layout is:
 
 ```
 {ROOT}/
-├── {ENTITY}/                                  act3, personal, WH_INC, WH_INTL, Earth9, ZTM…
-│   └── {BANK}/                                Chase, Wells_Fargo…
-│       └── {ACCOUNT}/                         Checking_x8130, Savings_x8155…
+├── {ENTITY}/                                  personal, business_a, business_b…
+│   └── {BANK}/                                Northbank, Meridian…
+│       └── {ACCOUNT}/                         Checking_x4021, Savings_x7788…
 │           └── {YYYY}/{MM}/
-│               ├── 20220930-statements-8130-.pdf        the source of truth
-│               ├── 20220930-statements-8130-_brew.txt   pdftotext/pandoc extraction
-│               ├── 20220930-statements-8130-_ocr.txt    OCR extraction
-│               └── 20220930-statements-8130-_claude.txt LLM extraction
+│               ├── 20220930-statements-4021-.pdf        the source of truth
+│               ├── 20220930-statements-4021-_brew.txt   pdftotext/pandoc extraction
+│               ├── 20220930-statements-4021-_ocr.txt    OCR extraction
+│               └── 20220930-statements-4021-_claude.txt LLM extraction
 └── import/                                    THE STAGING DIRECTORY — the only place we write
 ```
 
@@ -1260,11 +1270,11 @@ The map file is how the operator connects the statements tree to the budget:
 ```yaml
 # statements-map.yaml — lives with the statements, NOT in this repo
 accounts:
-  - match: { entity: personal, bank: Chase, account_last4: '8130' }
-    actual_account_id: 5a0e… # or: actual_account_name: "Chase Checking"
+  - match: { entity: personal, bank: Northbank, account_last4: '4021' }
+    actual_account_id: 5a0e… # or: actual_account_name: "Northbank Checking"
     start: 2022-09-01 # optional: ignore anything earlier
-  - match: { entity: act3, bank: Chase, account_last4: '8155' }
-    actual_account_name: 'ACT3 Savings'
+  - match: { entity: personal, bank: Northbank, account_last4: '7788' }
+    actual_account_name: 'Northbank Savings'
 ```
 
 **The plan is Actual's own preview, not our prediction of it (LOCKED).** `importTransactions` takes
@@ -1288,7 +1298,7 @@ whether the match carried an `imported_id`.
 The plan prints, per account:
 
 ```
-personal / Chase / Checking_x8130  ->  "Chase Checking" (5a0e…)
+personal / Northbank / Checking_x4021  ->  "Northbank Checking" (5a0e…)
   statements      41 primary, 3 superseded, 0 conflicts
   rows          1,904 extracted  ->  1,871 after de-dupe  (33 collapsed)
   vs. budget    1,742 already present (matched on imported_id)
