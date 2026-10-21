@@ -1,4 +1,4 @@
-@AGENTS.md
+ @AGENTS.md
 @.github/agents/pr-and-commit-rules.md
 
 ~/BGit/Bryan_git/actual_budget_bryan/
